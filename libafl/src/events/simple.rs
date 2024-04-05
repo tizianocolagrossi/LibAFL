@@ -16,7 +16,7 @@ use libafl_bolts::os::startable_self;
 use libafl_bolts::os::unix_signals::setup_signal_handler;
 #[cfg(all(feature = "std", feature = "fork", unix))]
 use libafl_bolts::os::{fork, ForkResult};
-use libafl_bolts::ClientId;
+use libafl_bolts::{current_time, ClientId};
 #[cfg(feature = "std")]
 use libafl_bolts::{shmem::ShMemProvider, staterestore::StateRestorer};
 #[cfg(feature = "std")]
@@ -463,7 +463,19 @@ where
     /// This [`EventManager`] is simple and single threaded,
     /// but can still used shared maps to recover from crashes and timeouts.
     #[allow(clippy::similar_names)]
-    pub fn launch(mut monitor: MT, shmem_provider: &mut SP) -> Result<(Option<S>, Self), Error>
+    pub fn launch(monitor: MT, shmem_provider: &mut SP) -> Result<(Option<S>, Self), Error>
+    where
+        S: DeserializeOwned + Serialize + HasCorpus + HasSolutions,
+        MT: Debug,
+    {
+        Self::launch_with_most_time(monitor, shmem_provider, Duration::from_secs(0))
+    }
+
+    /// Launch the simple restarting manager with a most_time variable.
+    /// This [`EventManager`] is simple and single threaded,
+    /// but can still used shared maps to recover from crashes and timeouts.
+    #[allow(clippy::similar_names)]
+    pub fn launch_with_most_time(mut monitor: MT, shmem_provider: &mut SP, most_time: Duration) -> Result<(Option<S>, Self), Error>
     where
         S: DeserializeOwned + Serialize + HasCorpus + HasSolutions,
         MT: Debug,
@@ -489,6 +501,8 @@ where
                 // We can live without a proper ctrl+c signal handler. Print and ignore.
                 log::error!("Failed to setup signal handlers: {_e}");
             }
+
+            let stop_time = monitor.start_time() + most_time;
 
             let mut ctr: u64 = 0;
             // Client->parent loop
@@ -531,6 +545,10 @@ where
                 let child_status = child_status.code().unwrap_or_default();
 
                 compiler_fence(Ordering::SeqCst);
+
+                if most_time.as_secs() != 0 && current_time() >= stop_time{
+                    return Err(Error::shutting_down());
+                }
 
                 if staterestorer.wants_to_exit() || Self::is_shutting_down() {
                     return Err(Error::shutting_down());

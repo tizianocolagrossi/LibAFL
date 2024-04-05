@@ -6,10 +6,11 @@ use alloc::string::String;
 use libafl::{mutators::Tokens, Error};
 
 use crate::{ACCOUNTING_MAP_SIZE, EDGES_MAP_SIZE};
+const ENUMS_MAP_SIZE: usize = 65_536;
 
 /// The map for edges.
 #[no_mangle]
-pub static mut __afl_area_ptr_local: [u8; EDGES_MAP_SIZE] = [0; EDGES_MAP_SIZE];
+pub static mut __afl_area_ptr_local: [u8; ENUMS_MAP_SIZE+EDGES_MAP_SIZE] = [0; ENUMS_MAP_SIZE+EDGES_MAP_SIZE];
 pub use __afl_area_ptr_local as EDGES_MAP;
 
 /// The map for accounting mem writes.
@@ -20,9 +21,19 @@ pub use __afl_acc_memop_ptr_local as ACCOUNTING_MEMOP_MAP;
 /// The max count of edges tracked.
 pub static mut MAX_EDGES_NUM: usize = 0;
 
+#[allow(non_upper_case_globals)]
+#[no_mangle]
+#[used]
+pub static mut __enu_area_ptr: *mut u8 = unsafe { __afl_area_ptr_local.as_mut_ptr() };
+#[allow(non_upper_case_globals)]
+#[no_mangle]
+#[used]
+pub static mut __afl_area_ptr: *mut u8 = unsafe { __afl_area_ptr_local.as_mut_ptr().add(ENUMS_MAP_SIZE) };
+
+
 extern "C" {
     /// The area pointer points to the edges map.
-    pub static mut __afl_area_ptr: *mut u8;
+    // pub static mut __afl_area_ptr: *mut u8;
 
     /// The area pointer points to the accounting mem operations map.
     pub static mut __afl_acc_memop_ptr: *mut u32;

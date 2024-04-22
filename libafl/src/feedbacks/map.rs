@@ -220,6 +220,33 @@ where
     }
 }
 
+/// A testcase metadata holding a list of maps were it was interesting
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(
+    any(not(feature = "serdeany_autoreg"), miri),
+    allow(clippy::unsafe_derive_deserialize)
+)] // for SerdeAny
+pub struct MapIterestingMetadata {
+    /// The list of map names where it is interesting.
+    pub maps_names: Vec<String>,
+}
+libafl_bolts::impl_serdeany!(MapIterestingMetadata);
+impl AsSlice for MapIterestingMetadata {
+    type Entry = String;
+    /// Convert to a slice
+    fn as_slice(&self) -> &[String] {
+        self.maps_names.as_slice()
+    }
+}
+
+impl MapIterestingMetadata {
+    /// Creates a new [`struct@MapIterestingMetadata`].
+    #[must_use]
+    pub fn new(maps_names: Vec<String>) -> Self {
+        Self { maps_names }
+    }
+}
+
 /// A testcase metadata holding a list of indexes of a map
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(
@@ -366,6 +393,8 @@ where
 /// The most common AFL-like feedback type
 #[derive(Clone, Debug)]
 pub struct MapFeedback<N, O, R, S, T> {
+    is_interesting_flag: bool,
+    track_interesting_map: bool,
     /// For tracking, always keep indexes and/or novelties, even if the map isn't considered `interesting`.
     always_track: bool,
     /// Indexes used in the last observation
@@ -446,6 +475,31 @@ where
     where
         OT: ObserversTuple<S>,
     {
+        // println!("for {:?} testcase observed by {:?} is {:?}", self.name, self.observer_name, self.is_interesting_flag);
+        // MapIterestingMetadata
+
+        if self.track_interesting_map && self.is_interesting_flag{
+            // act like a flag. if the testcase contain this metadata then is interesing for at least one map to track
+            let meta_interesting = MapIterestingMetadata::new(vec!(self.name.clone())); 
+            testcase.add_metadata(meta_interesting); 
+        }
+
+        // // track_interesting_maps
+        // if self.is_interesting_flag{
+        //     if testcase.has_metadata::<MapIterestingMetadata>(){
+        //         let meta_interesting = testcase.metadata::<MapIterestingMetadata>().unwrap();
+        //         let mut interesting_names: Vec<String> = vec!(self.name.clone());
+        //         interesting_names.append(&mut meta_interesting.maps_names.clone());
+           
+        //         let new_meta_interesting = MapIterestingMetadata::new(interesting_names);
+        //         testcase.add_metadata(new_meta_interesting); 
+                
+        //     }else{
+        //         let meta_interesting = MapIterestingMetadata::new(vec!(self.name.clone())); 
+        //         testcase.add_metadata(meta_interesting); 
+        //     }  
+        // }
+
         if let Some(novelties) = self.novelties.as_mut().map(core::mem::take) {
             let meta = MapNoveltiesMetadata::new(novelties);
             testcase.add_metadata(meta);
@@ -629,7 +683,7 @@ where
                 },
             )?;
         }
-        println!("for fedback {:?} is {:?}", &self.name, interesting);
+        self.is_interesting_flag = interesting;
         Ok(interesting)
     }
 }
@@ -673,6 +727,8 @@ where
     #[must_use]
     pub fn new(map_observer: &O) -> Self {
         Self {
+            is_interesting_flag:false,
+            track_interesting_map: false,
             indexes: false,
             novelties: None,
             name: MAPFEEDBACK_PREFIX.to_string() + map_observer.name(),
@@ -687,6 +743,24 @@ where
     #[must_use]
     pub fn tracking(map_observer: &O, track_indexes: bool, track_novelties: bool) -> Self {
         Self {
+            is_interesting_flag:false,
+            track_interesting_map: false,
+            indexes: track_indexes,
+            novelties: if track_novelties { Some(vec![]) } else { None },
+            name: MAPFEEDBACK_PREFIX.to_string() + map_observer.name(),
+            observer_name: map_observer.name().to_string(),
+            stats_name: create_stats_name(map_observer.name()),
+            always_track: false,
+            phantom: PhantomData,
+        }
+    }
+
+    /// Create new `MapFeedback` specifying if it must track indexes of used entries and/or novelties
+    #[must_use]
+    pub fn tracking_interestingness(map_observer: &O, track_indexes: bool, track_novelties: bool, track_interestingness: bool) -> Self {
+        Self {
+            is_interesting_flag:false,
+            track_interesting_map: track_interestingness,
             indexes: track_indexes,
             novelties: if track_novelties { Some(vec![]) } else { None },
             name: MAPFEEDBACK_PREFIX.to_string() + map_observer.name(),
@@ -701,6 +775,8 @@ where
     #[must_use]
     pub fn with_names(name: &'static str, observer_name: &'static str) -> Self {
         Self {
+            is_interesting_flag:false,
+            track_interesting_map: false,
             indexes: false,
             novelties: None,
             name: name.to_string(),
@@ -724,6 +800,8 @@ where
     #[must_use]
     pub fn with_name(name: &'static str, map_observer: &O) -> Self {
         Self {
+            is_interesting_flag:false,
+            track_interesting_map: false,
             indexes: false,
             novelties: None,
             name: name.to_string(),
@@ -743,6 +821,8 @@ where
         track_novelties: bool,
     ) -> Self {
         Self {
+            is_interesting_flag:false,
+            track_interesting_map: false,
             indexes: track_indexes,
             novelties: if track_novelties { Some(vec![]) } else { None },
             observer_name: observer_name.to_string(),
@@ -840,7 +920,7 @@ where
                 },
             )?;
         }
-        println!("for fedback {:?} is {:?}", &self.name, interesting);
+        self.is_interesting_flag = interesting;
         Ok(interesting)
     }
 }

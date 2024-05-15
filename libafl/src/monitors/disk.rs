@@ -230,3 +230,137 @@ where
         self.base.display(event_msg, sender_id);
     }
 }
+
+/// Wraps a base monitor and continuously appends the current statistics to a CSV file.
+#[derive(Debug, Clone)]
+pub struct OnDiskCSVMonitor<M>
+where
+    M: Monitor,
+{
+    base: M,
+    filename: PathBuf,
+    last_update: Duration,
+}
+
+impl<M> Monitor for OnDiskCSVMonitor<M>
+where
+    M: Monitor,
+{
+    /// The client monitor, mutable
+    fn client_stats_mut(&mut self) -> &mut Vec<ClientStats> {
+        self.base.client_stats_mut()
+    }
+
+    /// The client monitor
+    fn client_stats(&self) -> &[ClientStats] {
+        self.base.client_stats()
+    }
+
+    /// Time this fuzzing run stated
+    fn start_time(&self) -> Duration {
+        self.base.start_time()
+    }
+
+    /// Set creation time
+    fn set_start_time(&mut self, time: Duration) {
+        self.base.set_start_time(time);
+    }
+
+    fn aggregate(&mut self, name: &str) {
+        self.base.aggregate(name);
+    }
+
+    fn display(&mut self, event_msg: &str, sender_id: ClientId) {
+        self.base.display(event_msg, sender_id);
+
+        let cur_time = current_time();
+        if (cur_time - self.last_update).as_secs() >= 60 {
+            self.last_update = cur_time;
+
+            let file = OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&self.filename)
+                .expect("Failed to open CSV file");
+            if file.metadata().unwrap().len() == 0 {
+                writeln!(
+                    &file,
+                    "# This CSV is generated using the OnDiskCSVMonitor component of LibAFL
+run_time_secs,clients,corpus,objectives,executions,exec_sec,clients_info",
+                )
+                .expect("Failed to write to the CSV file");
+            }
+
+            let elapsed = cur_time - self.start_time();
+            write!(
+                &file,
+                "{},{},{},{},{},{},",
+                elapsed.as_secs(),
+                self.client_stats().len(),
+                self.corpus_size(),
+                self.objective_size(),
+                self.total_execs(),
+                self.execs_per_sec()
+            )
+            .expect("Failed to write to the CSV file");
+
+            for (i, client) in self.client_stats_mut().iter_mut().enumerate() {
+                let exec_sec = client.execs_per_sec(cur_time);
+
+                write!(
+                    &file,
+                    "client\t{};corpus\t{};objectives\t{};executions\t{};exec_sec\t{}",
+                    i + 1,
+                    client.corpus_size,
+                    client.objective_size,
+                    client.executions,
+                    exec_sec
+                )
+                .expect("Failed to write to the CSV file");
+
+                for (key, val) in &client.user_monitor {
+                    let k: String = key
+                        .chars()
+                        .map(|c| if c.is_whitespace() { '_' } else { c })
+                        .filter(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    write!(&file, ";{k}\t{val}").expect("Failed to write to the CSV file");
+                }
+            }
+
+            writeln!(&file, "").expect("Failed to write to the CSV file");
+
+            drop(file);
+        }
+    }
+}
+
+impl<M> OnDiskCSVMonitor<M>
+where
+    M: Monitor,
+{
+    /// Create new [`OnDiskCSVMonitor`]
+    #[must_use]
+    pub fn new<P>(filename: P, base: M) -> Self
+    where
+        P: Into<PathBuf>,
+    {
+        let path = filename.into();
+        Self {
+            base,
+            filename: path,
+            last_update: current_time(),
+        }
+    }
+}
+
+impl OnDiskCSVMonitor<NopMonitor> {
+    /// Create new [`OnDiskCSVMonitor`] without a base
+    #[must_use]
+    pub fn nop<P>(filename: P) -> Self
+    where
+        P: Into<PathBuf>,
+    {
+        Self::new(filename, NopMonitor::new())
+    }
+}

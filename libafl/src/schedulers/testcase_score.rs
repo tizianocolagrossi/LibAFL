@@ -6,7 +6,7 @@ use libafl_bolts::{HasLen, HasRefCnt};
 
 use crate::{
     corpus::{Corpus, SchedulerTestcaseMetadata, Testcase},
-    feedbacks::MapIndexesMetadata,
+    feedbacks::{MapIndexesMetadata, MapIterestingMetadata},
     schedulers::{
         minimizer::{IsFavoredMetadata, TopRatedsMetadata},
         powersched::{PowerSchedule, SchedulerMetadata},
@@ -333,6 +333,34 @@ where
             weight *= 2.0;
         }
 
+        assert!(weight.is_normal());
+
+        Ok(weight)
+    }
+}
+
+/// The weight for each corpus entry
+/// This result is used for corpus scheduling
+#[derive(Debug, Clone)]
+pub struct CorpusWeightWBonusOnInterestingTrackedTestcaseScore<S> {
+    phantom: PhantomData<S>,
+}
+
+impl<S> TestcaseScore<S> for CorpusWeightWBonusOnInterestingTrackedTestcaseScore<S>
+where
+    S: HasCorpus + HasMetadata,
+{
+    /// Compute the `weight` used in weighted corpus entry selection algo
+    #[allow(clippy::cast_precision_loss, clippy::cast_lossless)]
+    fn compute(state: &S, entry: &mut Testcase<S::Input>) -> Result<f64, Error> {
+        
+        // compute weight as CorpusWeightTestcaseScore
+        let mut weight = CorpusWeightTestcaseScore::compute(state, entry).unwrap();
+
+        // plus add bonus
+        if entry.has_metadata::<MapIterestingMetadata>(){
+            weight *= 4.0; // <-- edit here for change the bonus
+        }
         assert!(weight.is_normal());
 
         Ok(weight)

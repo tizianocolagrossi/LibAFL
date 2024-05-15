@@ -222,6 +222,33 @@ where
     }
 }
 
+/// A testcase metadata holding a list of maps were it was interesting
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(
+    any(not(feature = "serdeany_autoreg"), miri),
+    allow(clippy::unsafe_derive_deserialize)
+)] // for SerdeAny
+pub struct MapIterestingMetadata {
+    /// The list of map names where it is interesting.
+    pub maps_names: Vec<String>,
+}
+libafl_bolts::impl_serdeany!(MapIterestingMetadata);
+impl AsSlice for MapIterestingMetadata {
+    type Entry = String;
+    /// Convert to a slice
+    fn as_slice(&self) -> &[String] {
+        self.maps_names.as_slice()
+    }
+}
+
+impl MapIterestingMetadata {
+    /// Creates a new [`struct@MapIterestingMetadata`].
+    #[must_use]
+    pub fn new(maps_names: Vec<String>) -> Self {
+        Self { maps_names }
+    }
+}
+
 /// A testcase metadata holding a list of indexes of a map
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(
@@ -382,7 +409,10 @@ where
 
 /// The most common AFL-like feedback type
 #[derive(Clone, Debug)]
+
 pub struct MapFeedback<C, N, O, R, T> {
+    is_interesting_flag: bool,
+    track_interesting_map: bool,
     /// New indexes observed in the last observation
     novelties: Option<Vec<usize>>,
     /// Name identifier of this instance
@@ -454,6 +484,31 @@ where
         OT: ObserversTuple<S>,
         EM: EventFirer<State = S>,
     {
+        // println!("for {:?} testcase observed by {:?} is {:?}", self.name, self.observer_name, self.is_interesting_flag);
+        // MapIterestingMetadata
+
+        if self.track_interesting_map && self.is_interesting_flag{
+            // act like a flag. if the testcase contain this metadata then is interesing for at least one map to track
+            let meta_interesting = MapIterestingMetadata::new(vec!(self.name.clone())); 
+            testcase.add_metadata(meta_interesting); 
+        }
+
+        // // track_interesting_maps
+        // if self.is_interesting_flag{
+        //     if testcase.has_metadata::<MapIterestingMetadata>(){
+        //         let meta_interesting = testcase.metadata::<MapIterestingMetadata>().unwrap();
+        //         let mut interesting_names: Vec<String> = vec!(self.name.clone());
+        //         interesting_names.append(&mut meta_interesting.maps_names.clone());
+           
+        //         let new_meta_interesting = MapIterestingMetadata::new(interesting_names);
+        //         testcase.add_metadata(new_meta_interesting); 
+                
+        //     }else{
+        //         let meta_interesting = MapIterestingMetadata::new(vec!(self.name.clone())); 
+        //         testcase.add_metadata(meta_interesting); 
+        //     }  
+        // }
+
         if let Some(novelties) = self.novelties.as_mut().map(core::mem::take) {
             let meta = MapNoveltiesMetadata::new(novelties);
             testcase.add_metadata(meta);
@@ -649,6 +704,7 @@ where
             }
         }
 
+        self.is_interesting_flag = interesting;
         Ok(interesting)
     }
 }
@@ -695,6 +751,20 @@ where
     #[must_use]
     pub fn new(map_observer: &C) -> Self {
         Self {
+            is_interesting_flag:false,
+            track_interesting_map: false,
+            novelties: if C::NOVELTIES { Some(vec![]) } else { None },
+            name: map_observer.name().clone(),
+            map_ref: map_observer.handle(),
+            stats_name: create_stats_name(map_observer.name()),
+            phantom: PhantomData,
+        }
+    }
+    
+    pub fn tracking_interestingness(map_observer: &C) -> Self {
+        Self {
+            is_interesting_flag:false,
+            track_interesting_map: true,
             novelties: if C::NOVELTIES { Some(vec![]) } else { None },
             name: map_observer.name().clone(),
             map_ref: map_observer.handle(),
@@ -703,13 +773,29 @@ where
         }
     }
 
+
     /// Creating a new `MapFeedback` with a specific name. This is usefully whenever the same
     /// feedback is needed twice, but with a different history. Using `new()` always results in the
     /// same name and therefore also the same history.
     #[must_use]
+    pub fn with_name_tracking_interestingness(name: &'static str, map_observer: &C) -> Self {
+        let name = Cow::from(name);
+        Self {
+            is_interesting_flag:false,
+            track_interesting_map: true,
+            novelties: if C::NOVELTIES { Some(vec![]) } else { None },
+            map_ref: map_observer.handle(),
+            stats_name: create_stats_name(&name),
+            name,
+            phantom: PhantomData,
+        }
+    }
+    
     pub fn with_name(name: &'static str, map_observer: &C) -> Self {
         let name = Cow::from(name);
         Self {
+            is_interesting_flag:false,
+            track_interesting_map: false,
             novelties: if C::NOVELTIES { Some(vec![]) } else { None },
             map_ref: map_observer.handle(),
             stats_name: create_stats_name(&name),
@@ -782,6 +868,7 @@ where
             }
         }
 
+        self.is_interesting_flag = interesting;
         interesting
     }
 }

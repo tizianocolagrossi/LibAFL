@@ -25,6 +25,8 @@ use crate::{
     Error, HasMetadata,
 };
 
+use super::testcase_score::CorpusWeightWBonusOnInterestingTrackedTestcaseScore;
+
 /// The Metadata for `WeightedScheduler`
 #[cfg_attr(
     any(not(feature = "serdeany_autoreg"), miri),
@@ -365,3 +367,6 @@ where
 
 /// The standard corpus weight, same as in `AFL++`
 pub type StdWeightedScheduler<C, O, S> = WeightedScheduler<C, CorpusWeightTestcaseScore<S>, O, S>;
+
+/// The standard corpus weight, same as in `AFL++` but with bouns
+pub type StdWeightedSchedulerWBonusOnTrackedInterestingMaps<C, O, S> = WeightedScheduler<C, CorpusWeightWBonusOnInterestingTrackedTestcaseScore<S>, O, S>;

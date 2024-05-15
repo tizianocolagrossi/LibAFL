@@ -91,12 +91,7 @@ pub enum MutationResult {
 /// Simple as that.
 pub trait Mutator<I, S>: Named {
     /// Mutate a given input
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        stage_idx: i32,
-    ) -> Result<MutationResult, Error>;
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error>;
 
     /// Post-process given the outcome of the execution
     /// `new_corpus_idx` will be `Some` if a new `Testcase` was created this execution.
@@ -104,7 +99,6 @@ pub trait Mutator<I, S>: Named {
     fn post_exec(
         &mut self,
         _state: &mut S,
-        _stage_idx: i32,
         _new_corpus_idx: Option<CorpusId>,
     ) -> Result<(), Error> {
         Ok(())
@@ -120,7 +114,6 @@ pub trait MultiMutator<I, S>: Named {
         &mut self,
         state: &mut S,
         input: &I,
-        stage_idx: i32,
         max_count: Option<usize>,
     ) -> Result<Vec<I>, Error>;
 
@@ -130,7 +123,6 @@ pub trait MultiMutator<I, S>: Named {
     fn multi_post_exec(
         &mut self,
         _state: &mut S,
-        _stage_idx: i32,
         _new_corpus_idx: Option<CorpusId>,
     ) -> Result<(), Error> {
         Ok(())
@@ -140,19 +132,13 @@ pub trait MultiMutator<I, S>: Named {
 /// A `Tuple` of `Mutators` that can execute multiple `Mutators` in a row.
 pub trait MutatorsTuple<I, S>: HasLen {
     /// Runs the `mutate` function on all `Mutators` in this `Tuple`.
-    fn mutate_all(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        stage_idx: i32,
-    ) -> Result<MutationResult, Error>;
+    fn mutate_all(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error>;
 
     /// Runs the `post_exec` function on all `Mutators` in this `Tuple`.
     /// `new_corpus_idx` will be `Some` if a new `Testcase` was created this execution.
     fn post_exec_all(
         &mut self,
         state: &mut S,
-        stage_idx: i32,
         new_corpus_idx: Option<CorpusId>,
     ) -> Result<(), Error>;
 
@@ -162,7 +148,6 @@ pub trait MutatorsTuple<I, S>: HasLen {
         index: MutationId,
         state: &mut S,
         input: &mut I,
-        stage_idx: i32,
     ) -> Result<MutationResult, Error>;
 
     /// Gets the [`Mutator`] at the given index and runs the `post_exec` function on it.
@@ -171,7 +156,7 @@ pub trait MutatorsTuple<I, S>: HasLen {
         &mut self,
         index: usize,
         state: &mut S,
-        stage_idx: i32,
+
         corpus_idx: Option<CorpusId>,
     ) -> Result<(), Error>;
 
@@ -184,12 +169,7 @@ pub trait MutatorsTuple<I, S>: HasLen {
 
 impl<I, S> MutatorsTuple<I, S> for () {
     #[inline]
-    fn mutate_all(
-        &mut self,
-        _state: &mut S,
-        _input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate_all(&mut self, _state: &mut S, _input: &mut I) -> Result<MutationResult, Error> {
         Ok(MutationResult::Skipped)
     }
 
@@ -197,7 +177,6 @@ impl<I, S> MutatorsTuple<I, S> for () {
     fn post_exec_all(
         &mut self,
         _state: &mut S,
-        _stage_idx: i32,
         _new_corpus_idx: Option<CorpusId>,
     ) -> Result<(), Error> {
         Ok(())
@@ -209,7 +188,6 @@ impl<I, S> MutatorsTuple<I, S> for () {
         _index: MutationId,
         _state: &mut S,
         _input: &mut I,
-        _stage_idx: i32,
     ) -> Result<MutationResult, Error> {
         Ok(MutationResult::Skipped)
     }
@@ -219,7 +197,6 @@ impl<I, S> MutatorsTuple<I, S> for () {
         &mut self,
         _index: usize,
         _state: &mut S,
-        _stage_idx: i32,
         _new_corpus_idx: Option<CorpusId>,
     ) -> Result<(), Error> {
         Ok(())
@@ -241,14 +218,9 @@ where
     Head: Mutator<I, S>,
     Tail: MutatorsTuple<I, S>,
 {
-    fn mutate_all(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
-        let r = self.0.mutate(state, input, stage_idx)?;
-        if self.1.mutate_all(state, input, stage_idx)? == MutationResult::Mutated {
+    fn mutate_all(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
+        let r = self.0.mutate(state, input)?;
+        if self.1.mutate_all(state, input)? == MutationResult::Mutated {
             Ok(MutationResult::Mutated)
         } else {
             Ok(r)
@@ -258,11 +230,10 @@ where
     fn post_exec_all(
         &mut self,
         state: &mut S,
-        stage_idx: i32,
         new_corpus_idx: Option<CorpusId>,
     ) -> Result<(), Error> {
-        self.0.post_exec(state, stage_idx, new_corpus_idx)?;
-        self.1.post_exec_all(state, stage_idx, new_corpus_idx)
+        self.0.post_exec(state, new_corpus_idx)?;
+        self.1.post_exec_all(state, new_corpus_idx)
     }
 
     fn get_and_mutate(
@@ -270,13 +241,11 @@ where
         index: MutationId,
         state: &mut S,
         input: &mut I,
-        stage_idx: i32,
     ) -> Result<MutationResult, Error> {
         if index.0 == 0 {
-            self.0.mutate(state, input, stage_idx)
+            self.0.mutate(state, input)
         } else {
-            self.1
-                .get_and_mutate((index.0 - 1).into(), state, input, stage_idx)
+            self.1.get_and_mutate((index.0 - 1).into(), state, input)
         }
     }
 
@@ -284,14 +253,12 @@ where
         &mut self,
         index: usize,
         state: &mut S,
-        stage_idx: i32,
         new_corpus_idx: Option<CorpusId>,
     ) -> Result<(), Error> {
         if index == 0 {
-            self.0.post_exec(state, stage_idx, new_corpus_idx)
+            self.0.post_exec(state, new_corpus_idx)
         } else {
-            self.1
-                .get_and_post_exec(index - 1, state, stage_idx, new_corpus_idx)
+            self.1.get_and_post_exec(index - 1, state, new_corpus_idx)
         }
     }
 
@@ -331,22 +298,16 @@ impl<Tail, I, S> MutatorsTuple<I, S> for (Tail,)
 where
     Tail: MutatorsTuple<I, S>,
 {
-    fn mutate_all(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
-        self.0.mutate_all(state, input, stage_idx)
+    fn mutate_all(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
+        self.0.mutate_all(state, input)
     }
 
     fn post_exec_all(
         &mut self,
         state: &mut S,
-        stage_idx: i32,
         new_corpus_idx: Option<CorpusId>,
     ) -> Result<(), Error> {
-        self.0.post_exec_all(state, stage_idx, new_corpus_idx)
+        self.0.post_exec_all(state, new_corpus_idx)
     }
 
     fn get_and_mutate(
@@ -354,20 +315,17 @@ where
         index: MutationId,
         state: &mut S,
         input: &mut I,
-        stage_idx: i32,
     ) -> Result<MutationResult, Error> {
-        self.0.get_and_mutate(index, state, input, stage_idx)
+        self.0.get_and_mutate(index, state, input)
     }
 
     fn get_and_post_exec(
         &mut self,
         index: usize,
         state: &mut S,
-        stage_idx: i32,
         new_corpus_idx: Option<CorpusId>,
     ) -> Result<(), Error> {
-        self.0
-            .get_and_post_exec(index, state, stage_idx, new_corpus_idx)
+        self.0.get_and_post_exec(index, state, new_corpus_idx)
     }
 
     fn names(&self) -> Vec<&str> {
@@ -389,15 +347,10 @@ where
 }
 
 impl<I, S> MutatorsTuple<I, S> for Vec<Box<dyn Mutator<I, S>>> {
-    fn mutate_all(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate_all(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         self.iter_mut()
             .try_fold(MutationResult::Skipped, |ret, mutator| {
-                if mutator.mutate(state, input, stage_idx)? == MutationResult::Mutated {
+                if mutator.mutate(state, input)? == MutationResult::Mutated {
                     Ok(MutationResult::Mutated)
                 } else {
                     Ok(ret)
@@ -408,11 +361,10 @@ impl<I, S> MutatorsTuple<I, S> for Vec<Box<dyn Mutator<I, S>>> {
     fn post_exec_all(
         &mut self,
         state: &mut S,
-        stage_idx: i32,
         new_corpus_idx: Option<CorpusId>,
     ) -> Result<(), Error> {
         for mutator in self.iter_mut() {
-            mutator.post_exec(state, stage_idx, new_corpus_idx)?;
+            mutator.post_exec(state, new_corpus_idx)?;
         }
         Ok(())
     }
@@ -422,240 +374,36 @@ impl<I, S> MutatorsTuple<I, S> for Vec<Box<dyn Mutator<I, S>>> {
         index: MutationId,
         state: &mut S,
         input: &mut I,
-        stage_idx: i32,
     ) -> Result<MutationResult, Error> {
         let mutator = self
             .get_mut(index.0)
             .ok_or_else(|| Error::key_not_found("Mutator with id {index:?} not found."))?;
-        mutator.mutate(state, input, stage_idx)
+        mutator.mutate(state, input)
     }
 
     fn get_and_post_exec(
         &mut self,
         index: usize,
         state: &mut S,
-        stage_idx: i32,
         new_corpus_idx: Option<CorpusId>,
     ) -> Result<(), Error> {
         let mutator = self
             .get_mut(index)
             .ok_or_else(|| Error::key_not_found("Mutator with id {index:?} not found."))?;
-        mutator.post_exec(state, stage_idx, new_corpus_idx)
+        mutator.post_exec(state, new_corpus_idx)
     }
 
     fn names_reversed(&self) -> Vec<&str> {
-        self.iter().rev().map(|x| x.name()).collect()
+        self.iter().rev().map(|x| x.name().as_ref()).collect()
     }
 
     fn names(&self) -> Vec<&str> {
-        self.iter().map(|x| x.name()).collect()
+        self.iter().map(|x| x.name().as_ref()).collect()
     }
 }
 
 impl<I, S> IntoVec<Box<dyn Mutator<I, S>>> for Vec<Box<dyn Mutator<I, S>>> {
     fn into_vec(self) -> Vec<Box<dyn Mutator<I, S>>> {
         self
-    }
-}
-
-/// `Mutator` Python bindings
-#[cfg(feature = "python")]
-#[allow(missing_docs)]
-pub mod pybind {
-    use core::ffi::CStr;
-
-    use libafl_bolts::Named;
-    use pyo3::{prelude::*, AsPyPointer};
-
-    use super::{MutationResult, Mutator};
-    use crate::{
-        corpus::CorpusId,
-        inputs::{BytesInput, HasBytesVec},
-        mutators::scheduled::pybind::PythonStdHavocMutator,
-        state::pybind::{PythonStdState, PythonStdStateWrapper},
-        Error,
-    };
-
-    #[derive(Clone, Debug)]
-    pub struct PyObjectMutator {
-        inner: PyObject,
-    }
-
-    impl PyObjectMutator {
-        #[must_use]
-        pub fn new(obj: PyObject) -> Self {
-            PyObjectMutator { inner: obj }
-        }
-    }
-
-    impl Named for PyObjectMutator {
-        fn name(&self) -> &str {
-            unsafe { CStr::from_ptr((*(*self.inner.as_ptr()).ob_type).tp_name) }
-                .to_str()
-                .unwrap()
-        }
-    }
-
-    impl Mutator<BytesInput, PythonStdState> for PyObjectMutator {
-        fn mutate(
-            &mut self,
-            state: &mut PythonStdState,
-            input: &mut BytesInput,
-            stage_idx: i32,
-        ) -> Result<MutationResult, Error> {
-            let mutated = Python::with_gil(|py| -> PyResult<bool> {
-                self.inner
-                    .call_method1(
-                        py,
-                        "mutate",
-                        (PythonStdStateWrapper::wrap(state), input.bytes(), stage_idx),
-                    )?
-                    .extract(py)
-            })?;
-            Ok(if mutated {
-                MutationResult::Mutated
-            } else {
-                MutationResult::Skipped
-            })
-        }
-
-        fn post_exec(
-            &mut self,
-            state: &mut PythonStdState,
-            stage_idx: i32,
-            corpus_idx: Option<CorpusId>,
-        ) -> Result<(), Error> {
-            Python::with_gil(|py| -> PyResult<()> {
-                self.inner.call_method1(
-                    py,
-                    "post_exec",
-                    (
-                        PythonStdStateWrapper::wrap(state),
-                        stage_idx,
-                        corpus_idx.map(|x| x.0),
-                    ),
-                )?;
-                Ok(())
-            })?;
-            Ok(())
-        }
-    }
-
-    #[derive(Debug, Clone)]
-    pub enum PythonMutatorWrapper {
-        StdHavoc(Py<PythonStdHavocMutator>),
-        Python(PyObjectMutator),
-    }
-
-    /// Mutator Trait binding
-    #[pyclass(unsendable, name = "Mutator")]
-    #[derive(Debug, Clone)]
-    pub struct PythonMutator {
-        pub wrapper: PythonMutatorWrapper,
-    }
-
-    macro_rules! unwrap_me_mut {
-        ($wrapper:expr, $name:ident, $body:block) => {
-            libafl_bolts::unwrap_me_mut_body!($wrapper, $name, $body, PythonMutatorWrapper, {
-                StdHavoc
-            },
-            {
-                Python(py_wrapper) => {
-                    let $name = py_wrapper;
-                    $body
-                }
-            })
-        };
-    }
-
-    #[pymethods]
-    impl PythonMutator {
-        #[staticmethod]
-        #[must_use]
-        pub fn new_std_havoc(mgr: Py<PythonStdHavocMutator>) -> Self {
-            Self {
-                wrapper: PythonMutatorWrapper::StdHavoc(mgr),
-            }
-        }
-
-        #[staticmethod]
-        #[must_use]
-        pub fn new_py(obj: PyObject) -> Self {
-            Self {
-                wrapper: PythonMutatorWrapper::Python(PyObjectMutator::new(obj)),
-            }
-        }
-
-        #[must_use]
-        pub fn unwrap_py(&self) -> Option<PyObject> {
-            match &self.wrapper {
-                PythonMutatorWrapper::Python(pyo) => Some(pyo.inner.clone()),
-                PythonMutatorWrapper::StdHavoc(_) => None,
-            }
-        }
-    }
-
-    impl Named for PythonMutator {
-        fn name(&self) -> &str {
-            match &self.wrapper {
-                PythonMutatorWrapper::Python(pyo) => pyo.name(),
-                PythonMutatorWrapper::StdHavoc(_) => "StdHavocPythonMutator",
-            }
-        }
-    }
-
-    impl Mutator<BytesInput, PythonStdState> for PythonMutator {
-        fn mutate(
-            &mut self,
-            state: &mut PythonStdState,
-            input: &mut BytesInput,
-            stage_idx: i32,
-        ) -> Result<MutationResult, Error> {
-            unwrap_me_mut!(self.wrapper, m, { m.mutate(state, input, stage_idx) })
-        }
-
-        fn post_exec(
-            &mut self,
-            state: &mut PythonStdState,
-            stage_idx: i32,
-            corpus_idx: Option<CorpusId>,
-        ) -> Result<(), Error> {
-            unwrap_me_mut!(self.wrapper, m, {
-                m.post_exec(state, stage_idx, corpus_idx)
-            })
-        }
-    }
-
-    /// Register the classes to the python module
-    pub fn register(_py: Python, m: &PyModule) -> PyResult<()> {
-        m.add_class::<PythonMutator>()?;
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use alloc::{boxed::Box, vec::Vec};
-
-    use libafl_bolts::{rands::StdRand, tuples::IntoVec};
-
-    use crate::{
-        corpus::InMemoryCorpus,
-        inputs::BytesInput,
-        mutators::{havoc_mutations, Mutator, MutatorsTuple},
-        state::StdState,
-    };
-
-    type TestStdStateType =
-        StdState<BytesInput, InMemoryCorpus<BytesInput>, StdRand, InMemoryCorpus<BytesInput>>;
-
-    #[test]
-    fn test_tuple_into_vec() {
-        let mutators = havoc_mutations::<BytesInput>();
-        let names_before = MutatorsTuple::<BytesInput, TestStdStateType>::names(&mutators);
-
-        let mutators = havoc_mutations::<BytesInput>();
-        let mutators_vec: Vec<Box<dyn Mutator<BytesInput, TestStdStateType>>> = mutators.into_vec();
-        assert_eq!(names_before, mutators_vec.names());
     }
 }

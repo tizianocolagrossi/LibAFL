@@ -1,6 +1,6 @@
 //! The fuzzer, and state are the core pieces of every good fuzzer
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::vec::Vec;
 use core::{
     borrow::BorrowMut,
     cell::{Ref, RefMut},
@@ -18,7 +18,7 @@ use std::{
 use libafl_bolts::core_affinity::{CoreId, Cores};
 use libafl_bolts::{
     rands::{Rand, StdRand},
-    serdeany::{NamedSerdeAnyMap, SerdeAny, SerdeAnyMap},
+    serdeany::{NamedSerdeAnyMap, SerdeAnyMap},
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -34,7 +34,7 @@ use crate::{
     generators::Generator,
     inputs::{Input, UsesInput},
     stages::{HasCurrentStage, HasNestedStageStatus},
-    Error,
+    Error, HasMetadata, HasNamedMetadata,
 };
 
 /// The maximum size of a testcase
@@ -155,149 +155,6 @@ pub trait HasScalabilityMonitor {
     fn scalability_monitor_mut(&mut self) -> &mut ScalabilityMonitor;
 }
 
-/// Trait for elements offering metadata
-pub trait HasMetadata {
-    /// A map, storing all metadata
-    fn metadata_map(&self) -> &SerdeAnyMap;
-    /// A map, storing all metadata (mutable)
-    fn metadata_map_mut(&mut self) -> &mut SerdeAnyMap;
-
-    /// Add a metadata to the metadata map
-    #[inline]
-    fn add_metadata<M>(&mut self, meta: M)
-    where
-        M: SerdeAny,
-    {
-        self.metadata_map_mut().insert(meta);
-    }
-
-    /// Gets metadata, or inserts it using the given construction function `default`
-    fn metadata_or_insert_with<M>(&mut self, default: impl FnOnce() -> M) -> &mut M
-    where
-        M: SerdeAny,
-    {
-        self.metadata_map_mut().or_insert_with::<M>(default)
-    }
-
-    /// Remove a metadata from the metadata map
-    #[inline]
-    fn remove_metadata<M>(&mut self) -> Option<Box<M>>
-    where
-        M: SerdeAny,
-    {
-        self.metadata_map_mut().remove::<M>()
-    }
-
-    /// Check for a metadata
-    ///
-    /// # Note
-    /// For performance reasons, you likely want to use [`Self::metadata_or_insert_with`] instead
-    #[inline]
-    fn has_metadata<M>(&self) -> bool
-    where
-        M: SerdeAny,
-    {
-        self.metadata_map().get::<M>().is_some()
-    }
-
-    /// To get metadata
-    #[inline]
-    fn metadata<M>(&self) -> Result<&M, Error>
-    where
-        M: SerdeAny,
-    {
-        self.metadata_map().get::<M>().ok_or_else(|| {
-            Error::key_not_found(format!("{} not found", core::any::type_name::<M>()))
-        })
-    }
-
-    /// To get mutable metadata
-    #[inline]
-    fn metadata_mut<M>(&mut self) -> Result<&mut M, Error>
-    where
-        M: SerdeAny,
-    {
-        self.metadata_map_mut().get_mut::<M>().ok_or_else(|| {
-            Error::key_not_found(format!("{} not found", core::any::type_name::<M>()))
-        })
-    }
-}
-
-/// Trait for elements offering named metadata
-pub trait HasNamedMetadata {
-    /// A map, storing all metadata
-    fn named_metadata_map(&self) -> &NamedSerdeAnyMap;
-    /// A map, storing all metadata (mutable)
-    fn named_metadata_map_mut(&mut self) -> &mut NamedSerdeAnyMap;
-
-    /// Add a metadata to the metadata map
-    #[inline]
-    fn add_named_metadata<M>(&mut self, name: &str, meta: M)
-    where
-        M: SerdeAny,
-    {
-        self.named_metadata_map_mut().insert(name, meta);
-    }
-
-    /// Add a metadata to the metadata map
-    #[inline]
-    fn remove_named_metadata<M>(&mut self, name: &str) -> Option<Box<M>>
-    where
-        M: SerdeAny,
-    {
-        self.named_metadata_map_mut().remove::<M>(name)
-    }
-
-    /// Gets metadata, or inserts it using the given construction function `default`
-    fn named_metadata_or_insert_with<M>(
-        &mut self,
-        name: &str,
-        default: impl FnOnce() -> M,
-    ) -> &mut M
-    where
-        M: SerdeAny,
-    {
-        self.named_metadata_map_mut()
-            .or_insert_with::<M>(name, default)
-    }
-
-    /// Check for a metadata
-    ///
-    /// # Note
-    /// You likely want to use [`Self::named_metadata_or_insert_with`] for performance reasons.
-    #[inline]
-    fn has_named_metadata<M>(&self, name: &str) -> bool
-    where
-        M: SerdeAny,
-    {
-        self.named_metadata_map().contains::<M>(name)
-    }
-
-    /// To get named metadata
-    #[inline]
-    fn named_metadata<M>(&self, name: &str) -> Result<&M, Error>
-    where
-        M: SerdeAny,
-    {
-        self.named_metadata_map().get::<M>(name).ok_or_else(|| {
-            Error::key_not_found(format!("{} not found", core::any::type_name::<M>()))
-        })
-    }
-
-    /// To get mutable named metadata
-    #[inline]
-    fn named_metadata_mut<M>(&mut self, name: &str) -> Result<&mut M, Error>
-    where
-        M: SerdeAny,
-    {
-        self.named_metadata_map_mut()
-            .get_mut::<M>(name)
-            .ok_or_else(|| {
-                Error::key_not_found(format!("{} not found", core::any::type_name::<M>()))
-            })
-    }
-}
-
 /// Trait for the execution counter
 pub trait HasExecutions {
     /// The executions counter
@@ -334,6 +191,24 @@ pub trait HasLastReportTime {
     /// The last time we reported progress,if available/used (mutable).
     /// This information is used by fuzzer `maybe_report_progress`.
     fn last_report_time_mut(&mut self) -> &mut Option<Duration>;
+}
+
+/// Struct that holds the options for input loading
+#[cfg(feature = "std")]
+pub struct LoadConfig<'a, I, S, Z> {
+    /// Load Input even if it was deemed "uninteresting" by the fuzzer
+    forced: bool,
+    /// Function to load input from a Path
+    loader: &'a mut dyn FnMut(&mut Z, &mut S, &Path) -> Result<I, Error>,
+    /// Error if Input leads to a Solution.
+    exit_on_solution: bool,
+}
+
+#[cfg(feature = "std")]
+impl<'a, I, S, Z> Debug for LoadConfig<'a, I, S, Z> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "LoadConfig {{}}")
+    }
 }
 
 /// The state a fuzz run.
@@ -790,8 +665,7 @@ where
         executor: &mut E,
         manager: &mut EM,
         file_list: &[PathBuf],
-        forced: bool,
-        loader: &mut dyn FnMut(&mut Z, &mut Self, &Path) -> Result<I, Error>,
+        load_config: LoadConfig<I, Self, Z>,
     ) -> Result<(), Error>
     where
         E: UsesState<State = Self>,
@@ -807,44 +681,45 @@ where
             self.remaining_initial_files = Some(file_list.to_vec());
         }
 
-        self.continue_loading_initial_inputs_custom(fuzzer, executor, manager, forced, loader)
+        self.continue_loading_initial_inputs_custom(fuzzer, executor, manager, load_config)
     }
+
     fn load_file<E, EM, Z>(
         &mut self,
         path: &PathBuf,
         manager: &mut EM,
         fuzzer: &mut Z,
         executor: &mut E,
-        forced: bool,
-        loader: &mut dyn FnMut(&mut Z, &mut Self, &Path) -> Result<I, Error>,
-    ) -> Result<(), Error>
+        config: &mut LoadConfig<I, Self, Z>,
+    ) -> Result<ExecuteInputResult, Error>
     where
         E: UsesState<State = Self>,
         EM: EventFirer<State = Self>,
         Z: Evaluator<E, EM, State = Self>,
     {
         log::info!("Loading file {:?} ...", &path);
-        let input = loader(fuzzer, self, path)?;
-        if forced {
+        let input = (config.loader)(fuzzer, self, path)?;
+        if config.forced {
             let _: CorpusId = fuzzer.add_input(self, executor, manager, input)?;
+            Ok(ExecuteInputResult::Corpus)
         } else {
-            let (res, _) = fuzzer.evaluate_input(self, executor, manager, input)?;
+            let (res, _) = fuzzer.evaluate_input(self, executor, manager, input.clone())?;
             if res == ExecuteInputResult::None {
-                log::warn!("File {:?} was not interesting, skipped.", &path);
+                fuzzer.add_disabled_input(self, input)?;
+                log::warn!("input {:?} was not interesting, adding as disabled.", &path);
             }
+            Ok(res)
         }
-        Ok(())
     }
     /// Loads initial inputs from the passed-in `in_dirs`.
-    /// If `forced` is true, will add all testcases, no matter what.
-    /// This method takes a list of files.
+    /// This method takes a list of files and a `LoadConfig`
+    /// which specifies the special handling of initial inputs
     fn continue_loading_initial_inputs_custom<E, EM, Z>(
         &mut self,
         fuzzer: &mut Z,
         executor: &mut E,
         manager: &mut EM,
-        forced: bool,
-        loader: &mut dyn FnMut(&mut Z, &mut Self, &Path) -> Result<I, Error>,
+        mut config: LoadConfig<I, Self, Z>,
     ) -> Result<(), Error>
     where
         E: UsesState<State = Self>,
@@ -854,7 +729,13 @@ where
         loop {
             match self.next_file() {
                 Ok(path) => {
-                    self.load_file(&path, manager, fuzzer, executor, forced, loader)?;
+                    let res = self.load_file(&path, manager, fuzzer, executor, &mut config)?;
+                    if config.exit_on_solution && matches!(res, ExecuteInputResult::Solution) {
+                        return Err(Error::invalid_corpus(format!(
+                            "Input {} resulted in a solution.",
+                            path.display()
+                        )));
+                    }
                 }
                 Err(Error::IteratorEnd(_, _)) => break,
                 Err(e) => return Err(e),
@@ -893,8 +774,11 @@ where
             executor,
             manager,
             file_list,
-            false,
-            &mut |_, _, path| I::from_file(path),
+            LoadConfig {
+                loader: &mut |_, _, path| I::from_file(path),
+                forced: false,
+                exit_on_solution: false,
+            },
         )
     }
 
@@ -918,8 +802,11 @@ where
             fuzzer,
             executor,
             manager,
-            true,
-            &mut |_, _, path| I::from_file(path),
+            LoadConfig {
+                loader: &mut |_, _, path| I::from_file(path),
+                forced: true,
+                exit_on_solution: false,
+            },
         )
     }
     /// Loads initial inputs from the passed-in `in_dirs`.
@@ -942,8 +829,11 @@ where
             executor,
             manager,
             file_list,
-            true,
-            &mut |_, _, path| I::from_file(path),
+            LoadConfig {
+                loader: &mut |_, _, path| I::from_file(path),
+                forced: true,
+                exit_on_solution: false,
+            },
         )
     }
 
@@ -965,8 +855,38 @@ where
             fuzzer,
             executor,
             manager,
-            false,
-            &mut |_, _, path| I::from_file(path),
+            LoadConfig {
+                loader: &mut |_, _, path| I::from_file(path),
+                forced: false,
+                exit_on_solution: false,
+            },
+        )
+    }
+
+    /// Loads initial inputs from the passed-in `in_dirs`.
+    /// Will return a `CorpusError` if a solution is found
+    pub fn load_initial_inputs_disallow_solution<E, EM, Z>(
+        &mut self,
+        fuzzer: &mut Z,
+        executor: &mut E,
+        manager: &mut EM,
+        in_dirs: &[PathBuf],
+    ) -> Result<(), Error>
+    where
+        E: UsesState<State = Self>,
+        EM: EventFirer<State = Self>,
+        Z: Evaluator<E, EM, State = Self>,
+    {
+        self.canonicalize_input_dirs(in_dirs)?;
+        self.continue_loading_initial_inputs_custom(
+            fuzzer,
+            executor,
+            manager,
+            LoadConfig {
+                loader: &mut |_, _, path| I::from_file(path),
+                forced: false,
+                exit_on_solution: true,
+            },
         )
     }
 
@@ -1004,8 +924,11 @@ where
                 fuzzer,
                 executor,
                 manager,
-                false,
-                &mut |_, _, path| I::from_file(path),
+                LoadConfig {
+                    loader: &mut |_, _, path| I::from_file(path),
+                    forced: false,
+                    exit_on_solution: false,
+                },
             )?;
         } else {
             self.canonicalize_input_dirs(in_dirs)?;
@@ -1359,148 +1282,5 @@ pub mod test {
             &mut (),
         )
         .expect("couldn't instantiate the test state")
-    }
-}
-
-#[cfg(feature = "python")]
-#[allow(missing_docs)]
-/// `State` Python bindings
-pub mod pybind {
-    use alloc::{boxed::Box, vec::Vec};
-    use std::path::PathBuf;
-
-    use libafl_bolts::{ownedref::OwnedMutPtr, rands::pybind::PythonRand};
-    use pyo3::{prelude::*, types::PyDict};
-
-    use crate::{
-        corpus::pybind::PythonCorpus,
-        events::pybind::PythonEventManager,
-        executors::pybind::PythonExecutor,
-        feedbacks::pybind::PythonFeedback,
-        fuzzer::pybind::PythonStdFuzzerWrapper,
-        generators::pybind::PythonGenerator,
-        inputs::BytesInput,
-        pybind::PythonMetadata,
-        state::{
-            HasCorpus, HasExecutions, HasMaxSize, HasMetadata, HasRand, HasSolutions, StdState,
-        },
-    };
-
-    /// `StdState` with fixed generics
-    pub type PythonStdState = StdState<BytesInput, PythonCorpus, PythonRand, PythonCorpus>;
-
-    #[pyclass(unsendable, name = "StdState")]
-    #[derive(Debug)]
-    /// Python class for StdState
-    pub struct PythonStdStateWrapper {
-        /// Rust wrapped StdState object
-        pub inner: OwnedMutPtr<PythonStdState>,
-    }
-
-    impl PythonStdStateWrapper {
-        pub fn wrap(r: &mut PythonStdState) -> Self {
-            Self {
-                inner: OwnedMutPtr::Ptr(r),
-            }
-        }
-
-        #[must_use]
-        pub fn unwrap(&self) -> &PythonStdState {
-            self.inner.as_ref()
-        }
-
-        pub fn unwrap_mut(&mut self) -> &mut PythonStdState {
-            self.inner.as_mut()
-        }
-    }
-
-    #[pymethods]
-    impl PythonStdStateWrapper {
-        #[new]
-        fn new(
-            py_rand: PythonRand,
-            corpus: PythonCorpus,
-            solutions: PythonCorpus,
-            feedback: &mut PythonFeedback,
-            objective: &mut PythonFeedback,
-        ) -> Self {
-            Self {
-                inner: OwnedMutPtr::Owned(Box::new(
-                    StdState::new(py_rand, corpus, solutions, feedback, objective)
-                        .expect("Failed to create a new StdState"),
-                )),
-            }
-        }
-
-        fn metadata(&mut self) -> PyObject {
-            let meta = self.inner.as_mut().metadata_map_mut();
-            if !meta.contains::<PythonMetadata>() {
-                Python::with_gil(|py| {
-                    let dict: Py<PyDict> = PyDict::new(py).into();
-                    meta.insert(PythonMetadata::new(dict.to_object(py)));
-                });
-            }
-            meta.get::<PythonMetadata>().unwrap().map.clone()
-        }
-
-        fn rand(&self) -> PythonRand {
-            self.inner.as_ref().rand().clone()
-        }
-
-        fn corpus(&self) -> PythonCorpus {
-            self.inner.as_ref().corpus().clone()
-        }
-
-        fn solutions(&self) -> PythonCorpus {
-            self.inner.as_ref().solutions().clone()
-        }
-
-        fn executions(&self) -> u64 {
-            *self.inner.as_ref().executions()
-        }
-
-        fn max_size(&self) -> usize {
-            self.inner.as_ref().max_size()
-        }
-
-        fn generate_initial_inputs(
-            &mut self,
-            py_fuzzer: &mut PythonStdFuzzerWrapper,
-            py_executor: &mut PythonExecutor,
-            py_generator: &mut PythonGenerator,
-            py_mgr: &mut PythonEventManager,
-            num: usize,
-        ) {
-            self.inner
-                .as_mut()
-                .generate_initial_inputs(
-                    py_fuzzer.unwrap_mut(),
-                    py_executor,
-                    py_generator,
-                    py_mgr,
-                    num,
-                )
-                .expect("Failed to generate the initial corpus");
-        }
-
-        #[allow(clippy::needless_pass_by_value)]
-        fn load_initial_inputs(
-            &mut self,
-            py_fuzzer: &mut PythonStdFuzzerWrapper,
-            py_executor: &mut PythonExecutor,
-            py_mgr: &mut PythonEventManager,
-            in_dirs: Vec<PathBuf>,
-        ) {
-            self.inner
-                .as_mut()
-                .load_initial_inputs(py_fuzzer.unwrap_mut(), py_executor, py_mgr, &in_dirs)
-                .expect("Failed to load the initial corpus");
-        }
-    }
-
-    /// Register the classes to the python module
-    pub fn register(_py: Python, m: &PyModule) -> PyResult<()> {
-        m.add_class::<PythonStdStateWrapper>()?;
-        Ok(())
     }
 }

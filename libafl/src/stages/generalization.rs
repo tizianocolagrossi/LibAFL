@@ -1,12 +1,12 @@
 //! The tracing stage can trace the target and enrich a [`crate::corpus::Testcase`] with metadata, for example for `CmpLog`.
 
-use alloc::{
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::{borrow::Cow, vec::Vec};
 use core::{fmt::Debug, marker::PhantomData};
 
-use libafl_bolts::{AsSlice, Named};
+use libafl_bolts::{
+    tuples::{Handle, Handled},
+    AsSlice, Named,
+};
 
 use crate::{
     corpus::{Corpus, HasCurrentCorpusIdx},
@@ -14,11 +14,12 @@ use crate::{
     feedbacks::map::MapNoveltiesMetadata,
     inputs::{BytesInput, GeneralizedInputMetadata, GeneralizedItem, HasBytesVec, UsesInput},
     mark_feature_time,
-    observers::{MapObserver, ObserversTuple},
+    observers::{CanTrack, MapObserver, ObserversTuple},
+    require_novelties_tracking,
     stages::{RetryRestartHelper, Stage},
     start_timer,
-    state::{HasCorpus, HasExecutions, HasMetadata, HasNamedMetadata, UsesState},
-    Error,
+    state::{HasCorpus, HasExecutions, UsesState},
+    Error, HasMetadata, HasNamedMetadata,
 };
 #[cfg(feature = "introspection")]
 use crate::{monitors::PerfFeature, state::HasClientPerfMonitor};
@@ -41,19 +42,20 @@ fn find_next_char(list: &[Option<u8>], mut idx: usize, ch: u8) -> usize {
 
 /// A stage that runs a tracer executor
 #[derive(Clone, Debug)]
-pub struct GeneralizationStage<EM, O, OT, Z> {
-    map_observer_name: String,
+pub struct GeneralizationStage<C, EM, O, OT, Z> {
+    map_observer_handle: Handle<C>,
     #[allow(clippy::type_complexity)]
     phantom: PhantomData<(EM, O, OT, Z)>,
 }
 
-impl<EM, O, OT, Z> Named for GeneralizationStage<EM, O, OT, Z> {
-    fn name(&self) -> &str {
-        "GeneralizationStage"
+impl<C, EM, O, OT, Z> Named for GeneralizationStage<C, EM, O, OT, Z> {
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("GeneralizationStage");
+        &NAME
     }
 }
 
-impl<EM, O, OT, Z> UsesState for GeneralizationStage<EM, O, OT, Z>
+impl<C, EM, O, OT, Z> UsesState for GeneralizationStage<C, EM, O, OT, Z>
 where
     EM: UsesState,
     EM::State: UsesInput<Input = BytesInput>,
@@ -61,9 +63,10 @@ where
     type State = EM::State;
 }
 
-impl<E, EM, O, Z> Stage<E, EM, Z> for GeneralizationStage<EM, O, E::Observers, Z>
+impl<C, E, EM, O, Z> Stage<E, EM, Z> for GeneralizationStage<C, EM, O, E::Observers, Z>
 where
     O: MapObserver,
+    C: CanTrack + AsRef<O> + Named,
     E: Executor<EM, Z> + HasObservers,
     E::Observers: ObserversTuple<E::State>,
     E::State:
@@ -331,27 +334,20 @@ where
     }
 }
 
-impl<EM, O, OT, Z> GeneralizationStage<EM, O, OT, Z>
+impl<C, EM, O, OT, Z> GeneralizationStage<C, EM, O, OT, Z>
 where
     EM: UsesState,
     O: MapObserver,
+    C: CanTrack + AsRef<O> + Named,
     OT: ObserversTuple<EM::State>,
     EM::State: UsesInput<Input = BytesInput> + HasExecutions + HasMetadata + HasCorpus,
 {
     /// Create a new [`GeneralizationStage`].
     #[must_use]
-    pub fn new(map_observer: &O) -> Self {
+    pub fn new(map_observer: &C) -> Self {
+        require_novelties_tracking!("GeneralizationStage", C);
         Self {
-            map_observer_name: map_observer.name().to_string(),
-            phantom: PhantomData,
-        }
-    }
-
-    /// Create a new [`GeneralizationStage`] from name
-    #[must_use]
-    pub fn from_name(map_observer_name: &str) -> Self {
-        Self {
-            map_observer_name: map_observer_name.to_string(),
+            map_observer_handle: map_observer.handle(),
             phantom: PhantomData,
         }
     }
@@ -385,10 +381,8 @@ where
             .post_exec_all(state, input, &exit_kind)?;
         mark_feature_time!(state, PerfFeature::PostExecObservers);
 
-        let cnt = executor
-            .observers()
-            .match_name::<O>(&self.map_observer_name)
-            .ok_or_else(|| Error::key_not_found("MapObserver not found".to_string()))?
+        let cnt = executor.observers()[&self.map_observer_handle]
+            .as_ref()
             .how_many_set(novelties);
 
         Ok(cnt == novelties.len())

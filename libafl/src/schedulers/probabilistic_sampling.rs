@@ -12,8 +12,8 @@ use crate::{
     corpus::{Corpus, CorpusId, HasTestcase, Testcase},
     inputs::UsesInput,
     schedulers::{RemovableScheduler, Scheduler, TestcaseScore},
-    state::{HasCorpus, HasMetadata, HasRand, State, UsesState},
-    Error,
+    state::{HasCorpus, HasRand, State, UsesState},
+    Error, HasMetadata,
 };
 
 /// Conduct reservoir sampling (probabilistic sampling) over all corpus elements.
@@ -158,9 +158,11 @@ where
     #[allow(clippy::cast_precision_loss)]
     fn next(&mut self, state: &mut Self::State) -> Result<CorpusId, Error> {
         if state.corpus().count() == 0 {
-            Err(Error::empty(String::from("No entries in corpus")))
+            Err(Error::empty(String::from(
+                "No entries in corpus. This often implies the target is not properly instrumented.",
+            )))
         } else {
-            let rand_prob: f64 = (state.rand_mut().below(100) as f64) / 100.0;
+            let rand_prob: f64 = state.rand_mut().next_float();
             let meta = state.metadata_map().get::<ProbabilityMetadata>().unwrap();
             let threshold = meta.total_probability * rand_prob;
             let mut k: f64 = 0.0;
@@ -200,8 +202,8 @@ mod tests {
         feedbacks::ConstFeedback,
         inputs::{bytes::BytesInput, Input, UsesInput},
         schedulers::{ProbabilitySamplingScheduler, Scheduler, TestcaseScore},
-        state::{HasCorpus, HasMetadata, StdState},
-        Error,
+        state::{HasCorpus, StdState},
+        Error, HasMetadata,
     };
 
     const FACTOR: f64 = 1337.0;
@@ -235,8 +237,8 @@ mod tests {
             super::ProbabilityMetadata::register();
         }
 
-        // the first 3 probabilities will be .69, .86, .44
-        let rand = StdRand::with_seed(12);
+        // the first 3 probabilities will be .76, .86, .36
+        let rand = StdRand::with_seed(2);
 
         let mut scheduler = UniformProbabilitySamplingScheduler::new();
 

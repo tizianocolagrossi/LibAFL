@@ -17,14 +17,13 @@ use libafl::{
     state::{HasCorpus, HasExecutions, HasSolutions, State, UsesState},
     Error,
 };
+use libafl_bolts::tuples::RefIndexable;
 
 #[cfg(emulation_mode = "usermode")]
 use crate::executor::inproc_qemu_crash_handler;
 #[cfg(emulation_mode = "systemmode")]
 use crate::executor::{inproc_qemu_timeout_handler, BREAK_ON_TMOUT};
-use crate::{
-    emu::Emulator, executor::QemuExecutorState, helper::QemuHelperTuple, hooks::QemuHooks,
-};
+use crate::{executor::QemuExecutorState, helpers::QemuHelperTuple, hooks::QemuHooks, Qemu};
 
 pub struct StatefulQemuExecutor<'a, H, OT, QT, S>
 where
@@ -134,8 +133,8 @@ where
         self.inner.exposed_executor_state_mut().hooks_mut()
     }
 
-    pub fn emulator(&self) -> &Emulator {
-        self.inner.exposed_executor_state().emulator()
+    pub fn emulator(&self) -> &Qemu {
+        self.inner.exposed_executor_state().qemu()
     }
 }
 
@@ -156,17 +155,17 @@ where
         mgr: &mut EM,
         input: &Self::Input,
     ) -> Result<ExitKind, Error> {
-        let emu = Emulator::get().unwrap();
+        let qemu = Qemu::get().unwrap();
         self.inner
             .exposed_executor_state_mut()
-            .pre_exec::<Self, EM, OF, Z>(input, &emu);
+            .pre_exec::<Self, EM, OF, Z>(input, qemu);
         let mut exit_kind = self.inner.run_target(fuzzer, state, mgr, input)?;
         self.inner
             .exposed_executor_state
             .post_exec::<Self, EM, OT, OF, Z>(
                 input,
-                &emu,
-                self.inner.inner.observers_mut(),
+                qemu,
+                &mut *self.inner.inner.observers_mut(),
                 &mut exit_kind,
             );
         Ok(exit_kind)
@@ -201,12 +200,12 @@ where
     QT: QemuHelperTuple<S>,
 {
     #[inline]
-    fn observers(&self) -> &OT {
+    fn observers(&self) -> RefIndexable<&Self::Observers, Self::Observers> {
         self.inner.observers()
     }
 
     #[inline]
-    fn observers_mut(&mut self) -> &mut OT {
+    fn observers_mut(&mut self) -> RefIndexable<&mut Self::Observers, Self::Observers> {
         self.inner.observers_mut()
     }
 }

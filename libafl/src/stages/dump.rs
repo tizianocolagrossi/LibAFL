@@ -11,8 +11,8 @@ use crate::{
     corpus::{Corpus, CorpusId},
     inputs::UsesInput,
     stages::Stage,
-    state::{HasCorpus, HasMetadata, HasRand, HasSolutions, UsesState},
-    Error,
+    state::{HasCorpus, HasRand, HasSolutions, UsesState},
+    Error, HasMetadata,
 };
 
 /// Metadata used to store information about disk dump indexes for names
@@ -142,13 +142,19 @@ where
         let corpus_dir = corpus_dir.into();
         if let Err(e) = fs::create_dir(&corpus_dir) {
             if !corpus_dir.is_dir() {
-                return Err(Error::file(e));
+                return Err(Error::os_error(
+                    e,
+                    format!("Error creating directory {corpus_dir:?}"),
+                ));
             }
         }
         let solutions_dir = solutions_dir.into();
         if let Err(e) = fs::create_dir(&solutions_dir) {
             if !corpus_dir.is_dir() {
-                return Err(Error::file(e));
+                return Err(Error::os_error(
+                    e,
+                    format!("Error creating directory {solutions_dir:?}"),
+                ));
             }
         }
         Ok(Self {

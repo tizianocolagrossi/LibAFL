@@ -1,7 +1,7 @@
 //! Stage to compute/report AFL stats
 
 #[cfg(feature = "std")]
-use alloc::string::ToString;
+use alloc::{borrow::Cow, string::ToString};
 use core::{marker::PhantomData, time::Duration};
 
 use libafl_bolts::current_time;
@@ -13,8 +13,8 @@ use crate::{
     events::EventFirer,
     schedulers::minimizer::IsFavoredMetadata,
     stages::Stage,
-    state::{HasCorpus, HasImported, HasMetadata, UsesState},
-    Error,
+    state::{HasCorpus, HasImported, UsesState},
+    Error, HasMetadata,
 };
 #[cfg(feature = "std")]
 use crate::{
@@ -109,9 +109,9 @@ where
                 _manager.fire(
                     state,
                     Event::UpdateUserStats {
-                        name: "AflStats".to_string(),
+                        name: Cow::from("AflStats"),
                         value: UserStats::new(
-                            UserStatsValue::String(json.to_string()),
+                            UserStatsValue::String(Cow::from(json.to_string())),
                             AggregatorOps::None,
                         ),
                         phantom: PhantomData,

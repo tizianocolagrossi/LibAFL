@@ -1,5 +1,6 @@
 //! The tracing stage can trace the target and enrich a testcase with metadata, for example for `CmpLog`.
 
+use alloc::borrow::Cow;
 use core::{fmt::Debug, marker::PhantomData};
 
 use libafl_bolts::Named;
@@ -10,8 +11,8 @@ use crate::{
     observers::ObserversTuple,
     stages::{RetryRestartHelper, Stage},
     start_timer,
-    state::{HasCorpus, HasCurrentTestcase, HasExecutions, HasNamedMetadata, State, UsesState},
-    Error,
+    state::{HasCorpus, HasCurrentTestcase, HasExecutions, State, UsesState},
+    Error, HasNamedMetadata,
 };
 #[cfg(feature = "introspection")]
 use crate::{monitors::PerfFeature, state::HasClientPerfMonitor};
@@ -106,8 +107,9 @@ where
 }
 
 impl<EM, TE, Z> Named for TracingStage<EM, TE, Z> {
-    fn name(&self) -> &str {
-        "TracingStage"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("TracingStage");
+        &NAME
     }
 }
 
@@ -159,8 +161,9 @@ impl<E, EM, SOT, Z> Named for ShadowTracingStage<E, EM, SOT, Z>
 where
     E: UsesState,
 {
-    fn name(&self) -> &str {
-        "ShadowTracingStage"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("ShadowTracingStage");
+        &NAME
     }
 }
 

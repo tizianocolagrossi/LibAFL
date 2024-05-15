@@ -14,11 +14,8 @@ use crate::{
         ExecutionCountRestartHelper, MutationalStage, Stage,
     },
     start_timer,
-    state::{
-        HasCorpus, HasCurrentTestcase, HasExecutions, HasMetadata, HasNamedMetadata, HasRand,
-        UsesState,
-    },
-    Error, Evaluator,
+    state::{HasCorpus, HasCurrentTestcase, HasExecutions, HasRand, UsesState},
+    Error, Evaluator, HasMetadata, HasNamedMetadata,
 };
 #[cfg(feature = "introspection")]
 use crate::{monitors::PerfFeature, state::HasClientPerfMonitor};
@@ -172,7 +169,6 @@ where
 {
     /// Runs this (mutational) stage for the given `testcase`
     /// Exactly the same functionality as [`MutationalStage::perform_mutational`], but with added timeout support.
-    #[allow(clippy::cast_possible_wrap)] // more than i32 stages on 32 bit system - highly unlikely...
     fn perform_mutational(
         &mut self,
         fuzzer: &mut Z,
@@ -195,36 +191,38 @@ where
             (Some(fuzz_time), Some(iters)) => {
                 // perform n iterations or fuzz for provided time, whichever comes first
                 let start_time = current_time();
-                for i in 1..=iters {
+                for _ in 1..=iters {
                     if current_time() - start_time >= fuzz_time {
                         break;
                     }
 
-                    self.perform_mutation(fuzzer, executor, state, manager, &input, i)?;
+                    self.perform_mutation(fuzzer, executor, state, manager, &input)?;
                 }
             }
             (Some(fuzz_time), None) => {
                 // fuzz for provided time
                 let start_time = current_time();
-                for i in 1.. {
+                for _ in 1.. {
                     if current_time() - start_time >= fuzz_time {
                         break;
                     }
 
-                    self.perform_mutation(fuzzer, executor, state, manager, &input, i)?;
+                    self.perform_mutation(fuzzer, executor, state, manager, &input)?;
                 }
             }
             (None, Some(iters)) => {
                 // perform n iterations
-                for i in 1..=iters {
-                    self.perform_mutation(fuzzer, executor, state, manager, &input, i)?;
+                for _ in 1..=iters {
+                    self.perform_mutation(fuzzer, executor, state, manager, &input)?;
                 }
             }
             (None, None) => {
                 // fall back to random
-                let iters = self.iterations(state)? - self.execs_since_progress_start(state)?;
-                for i in 1..=iters {
-                    self.perform_mutation(fuzzer, executor, state, manager, &input, i)?;
+                let iters = self
+                    .iterations(state)?
+                    .saturating_sub(self.execs_since_progress_start(state)? as usize);
+                for _ in 1..=iters {
+                    self.perform_mutation(fuzzer, executor, state, manager, &input)?;
                 }
             }
         }
@@ -244,8 +242,7 @@ where
     }
 
     /// Gets the number of iterations as a random number
-    #[allow(clippy::cast_possible_truncation)]
-    fn iterations(&self, state: &mut Z::State) -> Result<u64, Error> {
+    fn iterations(&self, state: &mut Z::State) -> Result<usize, Error> {
         Ok(
             // fall back to random
             1 + state.rand_mut().below(DEFAULT_MUTATIONAL_MAX_ITERATIONS),
@@ -444,14 +441,11 @@ where
         state: &mut Z::State,
         manager: &mut EM,
         input: &I,
-        stage_idx: u64,
     ) -> Result<(), Error> {
         let mut input = input.clone();
 
         start_timer!(state);
-        let mutated = self
-            .mutator_mut()
-            .mutate(state, &mut input, stage_idx as i32)?;
+        let mutated = self.mutator_mut().mutate(state, &mut input)?;
         mark_feature_time!(state, PerfFeature::Mutate);
 
         if mutated == MutationResult::Skipped {
@@ -463,9 +457,8 @@ where
         let (_, corpus_idx) = fuzzer.evaluate_input(state, executor, manager, untransformed)?;
 
         start_timer!(state);
-        self.mutator_mut()
-            .post_exec(state, stage_idx as i32, corpus_idx)?;
-        post.post_exec(state, stage_idx as i32, corpus_idx)?;
+        self.mutator_mut().post_exec(state, corpus_idx)?;
+        post.post_exec(state, corpus_idx)?;
         mark_feature_time!(state, PerfFeature::MutatePostExec);
 
         Ok(())
@@ -480,7 +473,7 @@ where
     Z: Evaluator<E, EM>,
     Z::State: HasCorpus + HasRand + HasNamedMetadata,
 {
-    /// Creates a new tranforming mutational stage
+    /// Creates a new transforming mutational stage
     #[must_use]
     pub fn transforming(state: &mut Z::State, mutator: M, name: &str) -> Self {
         let _ = state.named_metadata_or_insert_with(name, TuneableMutationalStageMetadata::default);

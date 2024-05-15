@@ -8,8 +8,8 @@ use crate::{
     mutators::Mutator,
     schedulers::{testcase_score::CorpusPowerTestcaseScore, TestcaseScore},
     stages::{mutational::MutatedTransform, ExecutionCountRestartHelper, MutationalStage, Stage},
-    state::{HasCorpus, HasCurrentTestcase, HasExecutions, HasMetadata, HasRand, UsesState},
-    Error,
+    state::{HasCorpus, HasCurrentTestcase, HasExecutions, HasRand, UsesState},
+    Error, HasMetadata,
 };
 
 /// The mutational stage using power schedules
@@ -54,10 +54,10 @@ where
 
     /// Gets the number of iterations as a random number
     #[allow(clippy::cast_sign_loss)]
-    fn iterations(&self, state: &mut E::State) -> Result<u64, Error> {
+    fn iterations(&self, state: &mut E::State) -> Result<usize, Error> {
         // Update handicap
         let mut testcase = state.current_testcase_mut()?;
-        let score = F::compute(state, &mut testcase)? as u64;
+        let score = F::compute(state, &mut testcase)? as usize;
 
         Ok(score)
     }
@@ -90,12 +90,14 @@ where
         ret
     }
 
-    fn restart_progress_should_run(&mut self, state: &mut Self::State) -> Result<bool, Error> {
-        self.restart_helper.restart_progress_should_run(state)
+    fn restart_progress_should_run(&mut self, _state: &mut Self::State) -> Result<bool, Error> {
+        Ok(true)
+        // self.restart_helper.restart_progress_should_run(state)
     }
 
-    fn clear_restart_progress(&mut self, state: &mut Self::State) -> Result<(), Error> {
-        self.restart_helper.clear_restart_progress(state)
+    fn clear_restart_progress(&mut self, _state: &mut Self::State) -> Result<(), Error> {
+        Ok(())
+        // self.restart_helper.clear_restart_progress(state)
     }
 }
 

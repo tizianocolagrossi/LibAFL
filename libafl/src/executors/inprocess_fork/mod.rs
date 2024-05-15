@@ -7,7 +7,7 @@ use core::{
 use libafl_bolts::{
     os::unix_signals::{ucontext_t, Signal},
     shmem::ShMemProvider,
-    tuples::tuple_list,
+    tuples::{tuple_list, RefIndexable},
 };
 use libc::siginfo_t;
 use nix::unistd::{fork, ForkResult};
@@ -86,7 +86,7 @@ where
     OT: ObserversTuple<S>,
     S: UsesInput,
     SP: ShMemProvider,
-    HT: ExecutorHooksTuple,
+    HT: ExecutorHooksTuple<S>,
     EM: UsesState<State = S>,
     Z: UsesState<State = S>,
 {
@@ -101,7 +101,7 @@ where
     OT: ObserversTuple<S> + Debug,
     S: UsesInput,
     SP: ShMemProvider,
-    HT: ExecutorHooksTuple + Debug,
+    HT: ExecutorHooksTuple<S> + Debug,
     EM: UsesState<State = S>,
     Z: UsesState<State = S>,
 {
@@ -129,7 +129,7 @@ where
     OT: ObserversTuple<S>,
     S: State,
     SP: ShMemProvider,
-    HT: ExecutorHooksTuple,
+    HT: ExecutorHooksTuple<S>,
     EM: UsesState<State = S>,
     Z: UsesState<State = S>,
 {
@@ -143,7 +143,7 @@ where
     OT: ObserversTuple<S> + Debug,
     S: State + HasExecutions,
     SP: ShMemProvider,
-    HT: ExecutorHooksTuple,
+    HT: ExecutorHooksTuple<S>,
     EM: EventFirer<State = S> + EventRestarter<State = S>,
     Z: UsesState<State = S>,
 {
@@ -181,7 +181,7 @@ where
 impl<'a, H, HT, OT, S, SP, EM, Z, OF> GenericInProcessForkExecutor<'a, H, HT, OT, S, SP, EM, Z>
 where
     H: FnMut(&S::Input) -> ExitKind + ?Sized,
-    HT: ExecutorHooksTuple,
+    HT: ExecutorHooksTuple<S>,
     OT: ObserversTuple<S>,
     SP: ShMemProvider,
     EM: EventFirer<State = S> + EventRestarter<State = S>,
@@ -233,7 +233,7 @@ impl<'a, H, HT, OT, S, SP, EM, Z> UsesObservers
     for GenericInProcessForkExecutor<'a, H, HT, OT, S, SP, EM, Z>
 where
     H: FnMut(&S::Input) -> ExitKind + ?Sized,
-    HT: ExecutorHooksTuple,
+    HT: ExecutorHooksTuple<S>,
     OT: ObserversTuple<S>,
     S: State,
     SP: ShMemProvider,
@@ -247,7 +247,7 @@ impl<'a, H, HT, OT, S, SP, EM, Z> HasObservers
     for GenericInProcessForkExecutor<'a, H, HT, OT, S, SP, EM, Z>
 where
     H: FnMut(&S::Input) -> ExitKind + ?Sized,
-    HT: ExecutorHooksTuple,
+    HT: ExecutorHooksTuple<S>,
     S: State,
     OT: ObserversTuple<S>,
     SP: ShMemProvider,
@@ -255,12 +255,12 @@ where
     Z: UsesState<State = S>,
 {
     #[inline]
-    fn observers(&self) -> &OT {
+    fn observers(&self) -> RefIndexable<&Self::Observers, Self::Observers> {
         self.inner.observers()
     }
 
     #[inline]
-    fn observers_mut(&mut self) -> &mut OT {
+    fn observers_mut(&mut self) -> RefIndexable<&mut Self::Observers, Self::Observers> {
         self.inner.observers_mut()
     }
 }
@@ -295,7 +295,7 @@ pub mod child_signal_handlers {
             let data = addr_of_mut!(FORK_EXECUTOR_GLOBAL_DATA);
             if !data.is_null() && (*data).is_valid() {
                 let executor = (*data).executor_mut::<E>();
-                let observers = executor.observers_mut();
+                let mut observers = executor.observers_mut();
                 let state = (*data).state_mut::<E::State>();
                 // Invalidate data to not execute again the observer hooks in the crash handler
                 let input = (*data).take_current_input::<<E::State as UsesInput>::Input>();
@@ -326,7 +326,7 @@ pub mod child_signal_handlers {
     {
         if data.is_valid() {
             let executor = data.executor_mut::<E>();
-            let observers = executor.observers_mut();
+            let mut observers = executor.observers_mut();
             let state = data.state_mut::<E::State>();
             let input = data.take_current_input::<<E::State as UsesInput>::Input>();
             observers
@@ -349,7 +349,7 @@ pub mod child_signal_handlers {
     {
         if data.is_valid() {
             let executor = data.executor_mut::<E>();
-            let observers = executor.observers_mut();
+            let mut observers = executor.observers_mut();
             let state = data.state_mut::<E::State>();
             let input = data.take_current_input::<<E::State as UsesInput>::Input>();
             observers
@@ -363,6 +363,7 @@ pub mod child_signal_handlers {
 #[cfg(test)]
 mod tests {
     use libafl_bolts::tuples::tuple_list;
+    use serial_test::serial;
 
     use crate::{
         executors::{inprocess_fork::GenericInProcessForkExecutorInner, Executor, ExitKind},
@@ -370,6 +371,7 @@ mod tests {
     };
 
     #[test]
+    #[serial]
     #[cfg_attr(miri, ignore)]
     #[cfg(all(feature = "std", feature = "fork", unix))]
     fn test_inprocessfork_exec() {

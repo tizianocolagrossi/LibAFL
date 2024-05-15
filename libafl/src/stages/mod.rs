@@ -4,8 +4,8 @@ A well-known [`Stage`], for example, is the mutational stage, running multiple [
 Other stages may enrich [`crate::corpus::Testcase`]s with metadata.
 */
 
-use alloc::{boxed::Box, vec::Vec};
-use core::{any, marker::PhantomData};
+use alloc::{borrow::Cow, boxed::Box, vec::Vec};
+use core::marker::PhantomData;
 
 pub use calibrate::CalibrationStage;
 pub use colorization::*;
@@ -46,11 +46,9 @@ use crate::{
     observers::ObserversTuple,
     schedulers::Scheduler,
     stages::push::PushStage,
-    state::{
-        HasCorpus, HasExecutions, HasLastReportTime, HasMetadata, HasNamedMetadata, HasRand, State,
-        UsesState,
-    },
-    Error, EvaluatorObservers, ExecutesInput, ExecutionProcessor, HasScheduler,
+    state::{HasCorpus, HasExecutions, HasLastReportTime, HasRand, State, UsesState},
+    Error, EvaluatorObservers, ExecutesInput, ExecutionProcessor, HasMetadata, HasNamedMetadata,
+    HasScheduler,
 };
 
 /// Mutational stage is the normal fuzzing stage.
@@ -65,6 +63,8 @@ pub mod concolic;
 #[cfg(feature = "std")]
 pub mod dump;
 pub mod generalization;
+/// The [`generation::GenStage`] generates a single input and evaluates it.
+pub mod generation;
 pub mod logics;
 pub mod power;
 pub mod stats;
@@ -222,10 +222,18 @@ where
     Z: UsesState<State = Head::State>,
     Head::State: HasCurrentStage,
 {
-    fn into_vec(self) -> Vec<Box<dyn Stage<E, EM, Z, State = Head::State, Input = Head::Input>>> {
+    fn into_vec_reversed(
+        self,
+    ) -> Vec<Box<dyn Stage<E, EM, Z, State = Head::State, Input = Head::Input>>> {
         let (head, tail) = self.uncons();
-        let mut ret = tail.0.into_vec();
-        ret.insert(0, Box::new(head));
+        let mut ret = tail.0.into_vec_reversed();
+        ret.push(Box::new(head));
+        ret
+    }
+
+    fn into_vec(self) -> Vec<Box<dyn Stage<E, EM, Z, State = Head::State, Input = Head::Input>>> {
+        let mut ret = self.into_vec_reversed();
+        ret.reverse();
         ret
     }
 }
@@ -299,8 +307,9 @@ where
     CB: FnMut(&mut Z, &mut E, &mut E::State, &mut EM) -> Result<(), Error>,
     E: UsesState,
 {
-    fn name(&self) -> &str {
-        any::type_name::<Self>()
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("<unnamed fn>");
+        &NAME
     }
 }
 
@@ -422,11 +431,12 @@ where
 
         push_stage.set_current_corpus_idx(corpus_idx);
 
-        push_stage.init(fuzzer, state, event_mgr, executor.observers_mut())?;
+        push_stage.init(fuzzer, state, event_mgr, &mut *executor.observers_mut())?;
 
         loop {
             let input =
-                match push_stage.pre_exec(fuzzer, state, event_mgr, executor.observers_mut()) {
+                match push_stage.pre_exec(fuzzer, state, event_mgr, &mut *executor.observers_mut())
+                {
                     Some(Ok(next_input)) => next_input,
                     Some(Err(err)) => return Err(err),
                     None => break,
@@ -438,14 +448,14 @@ where
                 fuzzer,
                 state,
                 event_mgr,
-                executor.observers_mut(),
+                &mut *executor.observers_mut(),
                 input,
                 exit_kind,
             )?;
         }
 
         self.push_stage
-            .deinit(fuzzer, state, event_mgr, executor.observers_mut())
+            .deinit(fuzzer, state, event_mgr, &mut *executor.observers_mut())
     }
 
     #[inline]
@@ -636,250 +646,9 @@ impl ExecutionCountRestartHelper {
     }
 }
 
-/// `Stage` Python bindings
-#[cfg(feature = "python")]
-#[allow(missing_docs)]
-pub mod pybind {
-    use alloc::vec::Vec;
-
-    use libafl_bolts::Named;
-    use pyo3::prelude::*;
-
-    use crate::{
-        corpus::HasCurrentCorpusIdx,
-        events::pybind::PythonEventManager,
-        executors::pybind::PythonExecutor,
-        fuzzer::pybind::{PythonStdFuzzer, PythonStdFuzzerWrapper},
-        stages::{
-            mutational::pybind::PythonStdMutationalStage, HasCurrentStage, RetryRestartHelper,
-            Stage, StagesTuple,
-        },
-        state::{
-            pybind::{PythonStdState, PythonStdStateWrapper},
-            UsesState,
-        },
-        Error,
-    };
-
-    #[derive(Clone, Debug)]
-    pub struct PyObjectStage {
-        inner: PyObject,
-    }
-
-    impl PyObjectStage {
-        #[must_use]
-        pub fn new(obj: PyObject) -> Self {
-            PyObjectStage { inner: obj }
-        }
-    }
-
-    impl UsesState for PyObjectStage {
-        type State = PythonStdState;
-    }
-
-    impl Named for PyObjectStage {
-        fn name(&self) -> &str {
-            "PyObjectStage"
-        }
-    }
-
-    impl Stage<PythonExecutor, PythonEventManager, PythonStdFuzzer> for PyObjectStage {
-        #[inline]
-        fn perform(
-            &mut self,
-            fuzzer: &mut PythonStdFuzzer,
-            executor: &mut PythonExecutor,
-            state: &mut PythonStdState,
-            manager: &mut PythonEventManager,
-        ) -> Result<(), Error> {
-            let Some(corpus_idx) = state.current_corpus_idx()? else {
-                return Err(Error::illegal_state(
-                    "state is not currently processing a corpus index",
-                ));
-            };
-
-            Python::with_gil(|py| -> PyResult<()> {
-                self.inner.call_method1(
-                    py,
-                    "perform",
-                    (
-                        PythonStdFuzzerWrapper::wrap(fuzzer),
-                        executor.clone(),
-                        PythonStdStateWrapper::wrap(state),
-                        manager.clone(),
-                        corpus_idx.0,
-                    ),
-                )?;
-                Ok(())
-            })?;
-            Ok(())
-        }
-
-        fn restart_progress_should_run(&mut self, state: &mut Self::State) -> Result<bool, Error> {
-            // we don't support resumption in python, and maybe can't?
-            RetryRestartHelper::restart_progress_should_run(state, self, 2)
-        }
-
-        fn clear_restart_progress(&mut self, state: &mut Self::State) -> Result<(), Error> {
-            RetryRestartHelper::clear_restart_progress(state, self)
-        }
-    }
-
-    #[derive(Clone, Debug)]
-    pub enum PythonStageWrapper {
-        StdMutational(Py<PythonStdMutationalStage>),
-        Python(PyObjectStage),
-    }
-
-    /// Stage Trait binding
-    #[pyclass(unsendable, name = "Stage")]
-    #[derive(Clone, Debug)]
-    pub struct PythonStage {
-        wrapper: PythonStageWrapper,
-    }
-
-    macro_rules! unwrap_me_mut {
-        ($wrapper:expr, $name:ident, $body:block) => {
-            libafl_bolts::unwrap_me_mut_body!($wrapper, $name, $body, PythonStageWrapper,
-                { StdMutational },
-                {
-                    Python(py_wrapper) => {
-                        let $name = py_wrapper;
-                        $body
-                    }
-                }
-            )
-        };
-    }
-
-    #[pymethods]
-    impl PythonStage {
-        #[staticmethod]
-        #[must_use]
-        pub fn new_std_mutational(
-            py_std_havoc_mutations_stage: Py<PythonStdMutationalStage>,
-        ) -> Self {
-            Self {
-                wrapper: PythonStageWrapper::StdMutational(py_std_havoc_mutations_stage),
-            }
-        }
-
-        #[staticmethod]
-        #[must_use]
-        pub fn new_py(obj: PyObject) -> Self {
-            Self {
-                wrapper: PythonStageWrapper::Python(PyObjectStage::new(obj)),
-            }
-        }
-
-        #[must_use]
-        pub fn unwrap_py(&self) -> Option<PyObject> {
-            match &self.wrapper {
-                PythonStageWrapper::Python(pyo) => Some(pyo.inner.clone()),
-                PythonStageWrapper::StdMutational(_) => None,
-            }
-        }
-    }
-
-    impl UsesState for PythonStage {
-        type State = PythonStdState;
-    }
-
-    impl Named for PythonStage {
-        fn name(&self) -> &str {
-            "PythonStage"
-        }
-    }
-
-    impl Stage<PythonExecutor, PythonEventManager, PythonStdFuzzer> for PythonStage {
-        #[inline]
-        #[allow(clippy::let_and_return)]
-        fn perform(
-            &mut self,
-            fuzzer: &mut PythonStdFuzzer,
-            executor: &mut PythonExecutor,
-            state: &mut PythonStdState,
-            manager: &mut PythonEventManager,
-        ) -> Result<(), Error> {
-            unwrap_me_mut!(self.wrapper, s, {
-                s.perform_restartable(fuzzer, executor, state, manager)
-            })
-        }
-
-        #[inline]
-        fn restart_progress_should_run(
-            &mut self,
-            state: &mut PythonStdState,
-        ) -> Result<bool, Error> {
-            // TODO we need to apply MutationalStage-like resumption here.
-            // For now, make sure we don't get stuck crashing on a single test
-            RetryRestartHelper::restart_progress_should_run(state, self, 3)
-        }
-
-        #[inline]
-        fn clear_restart_progress(&mut self, state: &mut Self::State) -> Result<(), Error> {
-            RetryRestartHelper::clear_restart_progress(state, self)
-        }
-    }
-
-    #[derive(Clone, Debug)]
-    #[pyclass(unsendable, name = "StagesTuple")]
-    pub struct PythonStagesTuple {
-        list: Vec<PythonStage>,
-    }
-
-    #[pymethods]
-    impl PythonStagesTuple {
-        #[new]
-        fn new(list: Vec<PythonStage>) -> Self {
-            Self { list }
-        }
-
-        fn len(&self) -> usize {
-            self.list.len()
-        }
-
-        fn __getitem__(&self, idx: usize) -> PythonStage {
-            self.list[idx].clone()
-        }
-    }
-
-    impl StagesTuple<PythonExecutor, PythonEventManager, PythonStdState, PythonStdFuzzer>
-        for PythonStagesTuple
-    {
-        fn perform_all(
-            &mut self,
-            fuzzer: &mut PythonStdFuzzer,
-            executor: &mut PythonExecutor,
-            state: &mut PythonStdState,
-            manager: &mut PythonEventManager,
-        ) -> Result<(), Error> {
-            for (i, s) in self.list.iter_mut().enumerate() {
-                if let Some(continued) = state.current_stage()? {
-                    assert!(continued >= i);
-                    if continued > i {
-                        continue;
-                    }
-                } else {
-                    state.set_stage(i)?;
-                }
-                s.perform_restartable(fuzzer, executor, state, manager)?;
-                state.clear_stage()?;
-            }
-            Ok(())
-        }
-    }
-
-    /// Register the classes to the python module
-    pub fn register(_py: Python, m: &PyModule) -> PyResult<()> {
-        m.add_class::<PythonStage>()?;
-        m.add_class::<PythonStagesTuple>()?;
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 pub mod test {
+    use alloc::borrow::Cow;
     use core::marker::PhantomData;
 
     use libafl_bolts::{impl_serdeany, Error, Named};
@@ -889,7 +658,8 @@ pub mod test {
         corpus::{Corpus, HasCurrentCorpusIdx, Testcase},
         inputs::NopInput,
         stages::{RetryRestartHelper, Stage},
-        state::{test::test_std_state, HasCorpus, HasMetadata, State, UsesState},
+        state::{test::test_std_state, HasCorpus, State, UsesState},
+        HasMetadata,
     };
 
     #[derive(Debug)]
@@ -980,8 +750,9 @@ pub mod test {
         struct StageWithOneTry;
 
         impl Named for StageWithOneTry {
-            fn name(&self) -> &str {
-                "TestStage"
+            fn name(&self) -> &Cow<'static, str> {
+                static NAME: Cow<'static, str> = Cow::Borrowed("TestStage");
+                &NAME
             }
         }
 

@@ -16,7 +16,7 @@ use core::{
     time::Duration,
 };
 
-use libafl_bolts::tuples::tuple_list;
+use libafl_bolts::tuples::{tuple_list, RefIndexable};
 
 #[cfg(any(unix, feature = "std"))]
 use crate::executors::hooks::inprocess::GLOBAL_STATE;
@@ -32,8 +32,8 @@ use crate::{
     fuzzer::HasObjective,
     inputs::UsesInput,
     observers::{ObserversTuple, UsesObservers},
-    state::{HasCorpus, HasExecutions, HasMetadata, HasSolutions, State, UsesState},
-    Error,
+    state::{HasCorpus, HasCurrentTestcase, HasExecutions, HasSolutions, State, UsesState},
+    Error, HasMetadata,
 };
 
 /// The inner structure of `InProcessExecutor`.
@@ -62,7 +62,7 @@ pub struct GenericInProcessExecutor<H, HB, HT, OT, S>
 where
     H: FnMut(&S::Input) -> ExitKind + ?Sized,
     HB: BorrowMut<H>,
-    HT: ExecutorHooksTuple,
+    HT: ExecutorHooksTuple<S>,
     OT: ObserversTuple<S>,
     S: State,
 {
@@ -75,7 +75,7 @@ impl<H, HB, HT, OT, S> Debug for GenericInProcessExecutor<H, HB, HT, OT, S>
 where
     H: FnMut(&S::Input) -> ExitKind + ?Sized,
     HB: BorrowMut<H>,
-    HT: ExecutorHooksTuple,
+    HT: ExecutorHooksTuple<S>,
     OT: ObserversTuple<S> + Debug,
     S: State,
 {
@@ -91,7 +91,7 @@ impl<H, HB, HT, OT, S> UsesState for GenericInProcessExecutor<H, HB, HT, OT, S>
 where
     H: FnMut(&S::Input) -> ExitKind + ?Sized,
     HB: BorrowMut<H>,
-    HT: ExecutorHooksTuple,
+    HT: ExecutorHooksTuple<S>,
     OT: ObserversTuple<S>,
     S: State,
 {
@@ -102,7 +102,7 @@ impl<H, HB, HT, OT, S> UsesObservers for GenericInProcessExecutor<H, HB, HT, OT,
 where
     H: FnMut(&S::Input) -> ExitKind + ?Sized,
     HB: BorrowMut<H>,
-    HT: ExecutorHooksTuple,
+    HT: ExecutorHooksTuple<S>,
     OT: ObserversTuple<S>,
     S: State,
 {
@@ -114,7 +114,7 @@ where
     EM: UsesState<State = S>,
     H: FnMut(&S::Input) -> ExitKind + ?Sized,
     HB: BorrowMut<H>,
-    HT: ExecutorHooksTuple,
+    HT: ExecutorHooksTuple<S>,
     OT: ObserversTuple<S>,
     S: State + HasExecutions,
     Z: UsesState<State = S>,
@@ -132,11 +132,11 @@ where
             self.inner
                 .enter_target(fuzzer, state, mgr, input, executor_ptr);
         }
-        self.inner.hooks.pre_exec_all(fuzzer, state, mgr, input);
+        self.inner.hooks.pre_exec_all(state, input);
 
-        let ret = (self.harness_fn.borrow_mut())(input);
+        let ret = self.harness_fn.borrow_mut()(input);
 
-        self.inner.hooks.post_exec_all(fuzzer, state, mgr, input);
+        self.inner.hooks.post_exec_all(state, input);
         self.inner.leave_target(fuzzer, state, mgr, input);
         Ok(ret)
     }
@@ -146,17 +146,17 @@ impl<H, HB, HT, OT, S> HasObservers for GenericInProcessExecutor<H, HB, HT, OT, 
 where
     H: FnMut(&S::Input) -> ExitKind + ?Sized,
     HB: BorrowMut<H>,
-    HT: ExecutorHooksTuple,
+    HT: ExecutorHooksTuple<S>,
     OT: ObserversTuple<S>,
     S: State,
 {
     #[inline]
-    fn observers(&self) -> &OT {
+    fn observers(&self) -> RefIndexable<&Self::Observers, Self::Observers> {
         self.inner.observers()
     }
 
     #[inline]
-    fn observers_mut(&mut self) -> &mut OT {
+    fn observers_mut(&mut self) -> RefIndexable<&mut Self::Observers, Self::Observers> {
         self.inner.observers_mut()
     }
 }
@@ -269,7 +269,7 @@ impl<H, HB, HT, OT, S> GenericInProcessExecutor<H, HB, HT, OT, S>
 where
     H: FnMut(&S::Input) -> ExitKind + ?Sized,
     HB: BorrowMut<H>,
-    HT: ExecutorHooksTuple,
+    HT: ExecutorHooksTuple<S>,
     OT: ObserversTuple<S>,
     S: State + HasExecutions + HasSolutions + HasCorpus,
 {
@@ -377,43 +377,46 @@ where
 
     /// The inprocess handlers
     #[inline]
-    pub fn hooks(&self) -> &(InProcessHooks, HT) {
+    pub fn hooks(&self) -> &(InProcessHooks<S>, HT) {
         self.inner.hooks()
     }
 
     /// The inprocess handlers (mutable)
     #[inline]
-    pub fn hooks_mut(&mut self) -> &mut (InProcessHooks, HT) {
+    pub fn hooks_mut(&mut self) -> &mut (InProcessHooks<S>, HT) {
         self.inner.hooks_mut()
     }
 }
 
 /// The struct has [`InProcessHooks`].
-pub trait HasInProcessHooks {
+pub trait HasInProcessHooks<S>
+where
+    S: UsesInput,
+{
     /// Get the in-process handlers.
-    fn inprocess_hooks(&self) -> &InProcessHooks;
+    fn inprocess_hooks(&self) -> &InProcessHooks<S>;
 
     /// Get the mut in-process handlers.
-    fn inprocess_hooks_mut(&mut self) -> &mut InProcessHooks;
+    fn inprocess_hooks_mut(&mut self) -> &mut InProcessHooks<S>;
 }
 
-impl<H, HB, HT, OT, S> HasInProcessHooks for GenericInProcessExecutor<H, HB, HT, OT, S>
+impl<H, HB, HT, OT, S> HasInProcessHooks<S> for GenericInProcessExecutor<H, HB, HT, OT, S>
 where
     H: FnMut(&<S as UsesInput>::Input) -> ExitKind + ?Sized,
     HB: BorrowMut<H>,
-    HT: ExecutorHooksTuple,
+    HT: ExecutorHooksTuple<S>,
     OT: ObserversTuple<S>,
     S: State + HasExecutions + HasSolutions + HasCorpus,
 {
     /// the timeout handler
     #[inline]
-    fn inprocess_hooks(&self) -> &InProcessHooks {
+    fn inprocess_hooks(&self) -> &InProcessHooks<S> {
         self.inner.inprocess_hooks()
     }
 
     /// the timeout handler
     #[inline]
-    fn inprocess_hooks_mut(&mut self) -> &mut InProcessHooks {
+    fn inprocess_hooks_mut(&mut self) -> &mut InProcessHooks<S> {
         self.inner.inprocess_hooks_mut()
     }
 }
@@ -435,7 +438,7 @@ pub fn run_observers_and_save_state<E, EM, OF, Z>(
     E::State: HasExecutions + HasSolutions + HasCorpus,
     Z: HasObjective<Objective = OF, State = E::State>,
 {
-    let observers = executor.observers_mut();
+    let mut observers = executor.observers_mut();
 
     observers
         .post_exec_all(state, input, &exitkind)
@@ -443,16 +446,22 @@ pub fn run_observers_and_save_state<E, EM, OF, Z>(
 
     let interesting = fuzzer
         .objective_mut()
-        .is_interesting(state, event_mgr, input, observers, &exitkind)
+        .is_interesting(state, event_mgr, input, &*observers, &exitkind)
         .expect("In run_observers_and_save_state objective failure.");
 
     if interesting {
-        let mut new_testcase = Testcase::with_executions(input.clone(), *state.executions());
+        let executions = *state.executions();
+        let mut new_testcase = Testcase::with_executions(input.clone(), executions);
         new_testcase.add_metadata(exitkind);
         new_testcase.set_parent_id_optional(*state.corpus().current());
+
+        if let Ok(mut tc) = state.current_testcase_mut() {
+            tc.found_objective();
+        }
+
         fuzzer
             .objective_mut()
-            .append_metadata(state, observers, &mut new_testcase)
+            .append_metadata(state, event_mgr, &*observers, &mut new_testcase)
             .expect("Failed adding metadata");
         state
             .solutions_mut()
@@ -463,6 +472,8 @@ pub fn run_observers_and_save_state<E, EM, OF, Z>(
                 state,
                 Event::Objective {
                     objective_size: state.solutions().count(),
+                    executions,
+                    time: libafl_bolts::current_time(),
                 },
             )
             .expect("Could not save state in run_observers_and_save_state");
@@ -557,76 +568,5 @@ mod tests {
         in_process_executor
             .run_target(&mut fuzzer, &mut state, &mut mgr, &input)
             .unwrap();
-    }
-}
-
-#[cfg(feature = "python")]
-#[allow(missing_docs)]
-#[allow(clippy::unnecessary_fallible_conversions, unused_qualifications)]
-/// `InProcess` Python bindings
-pub mod pybind {
-    use alloc::boxed::Box;
-
-    use libafl_bolts::tuples::tuple_list;
-    use pyo3::{prelude::*, types::PyBytes};
-
-    use crate::{
-        events::pybind::PythonEventManager,
-        executors::{inprocess::OwnedInProcessExecutor, pybind::PythonExecutor, ExitKind},
-        fuzzer::pybind::PythonStdFuzzerWrapper,
-        inputs::{BytesInput, HasBytesVec},
-        observers::pybind::PythonObserversTuple,
-        state::pybind::{PythonStdState, PythonStdStateWrapper},
-    };
-
-    #[pyclass(unsendable, name = "InProcessExecutor")]
-    #[derive(Debug)]
-    /// Python class for OwnedInProcessExecutor (i.e. InProcessExecutor with owned harness)
-    pub struct PythonOwnedInProcessExecutor {
-        /// Rust wrapped OwnedInProcessExecutor object
-        pub inner: OwnedInProcessExecutor<PythonObserversTuple, PythonStdState>,
-    }
-
-    #[pymethods]
-    impl PythonOwnedInProcessExecutor {
-        #[new]
-        fn new(
-            harness: PyObject,
-            py_observers: PythonObserversTuple,
-            py_fuzzer: &mut PythonStdFuzzerWrapper,
-            py_state: &mut PythonStdStateWrapper,
-            py_event_manager: &mut PythonEventManager,
-        ) -> Self {
-            Self {
-                inner: OwnedInProcessExecutor::generic(
-                    tuple_list!(),
-                    Box::new(move |input: &BytesInput| {
-                        Python::with_gil(|py| -> PyResult<()> {
-                            let args = (PyBytes::new(py, input.bytes()),);
-                            harness.call1(py, args)?;
-                            Ok(())
-                        })
-                        .unwrap();
-                        ExitKind::Ok
-                    }),
-                    py_observers,
-                    py_fuzzer.unwrap_mut(),
-                    py_state.unwrap_mut(),
-                    py_event_manager,
-                )
-                .expect("Failed to create the Executor"),
-            }
-        }
-
-        #[must_use]
-        pub fn as_executor(slf: Py<Self>) -> PythonExecutor {
-            PythonExecutor::new_inprocess(slf)
-        }
-    }
-
-    /// Register the classes to the python module
-    pub fn register(_py: Python, m: &PyModule) -> PyResult<()> {
-        m.add_class::<PythonOwnedInProcessExecutor>()?;
-        Ok(())
     }
 }

@@ -1,5 +1,6 @@
 //! The [`SyncFromDiskStage`] is a stage that imports inputs from disk for e.g. sync with AFL
 
+use alloc::borrow::Cow;
 use core::marker::PhantomData;
 use std::{
     fs,
@@ -19,8 +20,8 @@ use crate::{
     fuzzer::{Evaluator, EvaluatorObservers, ExecutionProcessor},
     inputs::{Input, InputConverter, UsesInput},
     stages::{RetryRestartHelper, Stage},
-    state::{HasCorpus, HasExecutions, HasMetadata, HasNamedMetadata, HasRand, State, UsesState},
-    Error,
+    state::{HasCorpus, HasExecutions, HasRand, State, UsesState},
+    Error, HasMetadata, HasNamedMetadata,
 };
 
 /// Metadata used to store information about disk sync time
@@ -63,8 +64,9 @@ impl<CB, E, EM, Z> Named for SyncFromDiskStage<CB, E, EM, Z>
 where
     E: UsesState,
 {
-    fn name(&self) -> &str {
-        self.sync_dir.to_str().unwrap()
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("SyncFromDiskStage");
+        &NAME
     }
 }
 
@@ -239,7 +241,7 @@ impl SyncFromBrokerMetadata {
 
 /// A stage that loads testcases from disk to sync with other fuzzers such as AFL++
 #[derive(Debug)]
-pub struct SyncFromBrokerStage<IC, ICB, DI, S, SP>
+pub struct SyncFromBrokerStage<DI, IC, ICB, S, SP>
 where
     SP: ShMemProvider + 'static,
     S: UsesInput,
@@ -247,10 +249,10 @@ where
     ICB: InputConverter<From = DI, To = S::Input>,
     DI: Input,
 {
-    client: LlmpEventConverter<IC, ICB, DI, S, SP>,
+    client: LlmpEventConverter<DI, IC, ICB, S, SP>,
 }
 
-impl<IC, ICB, DI, S, SP> UsesState for SyncFromBrokerStage<IC, ICB, DI, S, SP>
+impl<DI, IC, ICB, S, SP> UsesState for SyncFromBrokerStage<DI, IC, ICB, S, SP>
 where
     SP: ShMemProvider + 'static,
     S: State,
@@ -261,7 +263,7 @@ where
     type State = S;
 }
 
-impl<E, EM, IC, ICB, DI, S, SP, Z> Stage<E, EM, Z> for SyncFromBrokerStage<IC, ICB, DI, S, SP>
+impl<E, EM, IC, ICB, DI, S, SP, Z> Stage<E, EM, Z> for SyncFromBrokerStage<DI, IC, ICB, S, SP>
 where
     EM: UsesState<State = S> + EventFirer,
     S: State + HasExecutions + HasCorpus + HasRand + HasMetadata + HasTestcase,
@@ -343,7 +345,7 @@ where
     }
 }
 
-impl<IC, ICB, DI, S, SP> SyncFromBrokerStage<IC, ICB, DI, S, SP>
+impl<DI, IC, ICB, S, SP> SyncFromBrokerStage<DI, IC, ICB, S, SP>
 where
     SP: ShMemProvider + 'static,
     S: UsesInput,
@@ -353,7 +355,7 @@ where
 {
     /// Creates a new [`SyncFromBrokerStage`]
     #[must_use]
-    pub fn new(client: LlmpEventConverter<IC, ICB, DI, S, SP>) -> Self {
+    pub fn new(client: LlmpEventConverter<DI, IC, ICB, S, SP>) -> Self {
         Self { client }
     }
 }
